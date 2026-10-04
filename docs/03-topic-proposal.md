@@ -78,7 +78,7 @@ Also here: 5 protocols in one broker (AMQP 1.0/0-9-1, MQTT, STOMP, stream) vs 1 
 
 *Q&A only:* `x-stream-offset` replay — reconsume yesterday's events from a RabbitMQ stream in php-amqplib, to bury "RabbitMQ can't replay." Pass `new \DateTimeImmutable('-1 day')` or `'1D'`; a PHP int is read as an offset and silently attaches past the end.
 
-**Setup:** `docker-compose` with pinned images — `rabbitmq:4.3.x-management` (exact tested patch), `apache/kafka:4.3.1`, kafka-ui, and a PHP 8.4 CLI image with `install-php-extensions sockets pcntl rdkafka`. Pre-pull all images (venue Wi-Fi). Pre-record both demos as a fallback.
+**Setup:** `docker-compose` with pinned images — `rabbitmq:4.3.6-management`, `apache/kafka:4.3.1`, `kafbat/kafka-ui:v1.5.0` (see [compose.yaml](../compose.yaml)), and a PHP 8.4 CLI image with `install-php-extensions sockets pcntl rdkafka`. Pre-pull all images (venue Wi-Fi). Pre-record both demos as a fallback.
 
 ---
 
