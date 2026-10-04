@@ -1,8 +1,8 @@
-
 # Source: rabbitmq.com/docs/compare/kafka — structured summary
 
 > Source: <https://www.rabbitmq.com/docs/compare/kafka>
-> Read on 2026-09-01. **Written by the RabbitMQ team — self-declared bias.** See `02-related-research.md` for cross-checks.
+> Read on 2026-09-01. **Written by the RabbitMQ team — self-declared bias.** See [02-related-research.md](02-related-research.md) for cross-checks.
+> Features marked **(Tanzu)** exist only in commercial VMware Tanzu RabbitMQ, not open-source RabbitMQ.
 
 ## 0. The thesis of the page
 
@@ -11,12 +11,14 @@ The old rule — *"Kafka for streaming, RabbitMQ for queueing"* — is dead:
 | Year | Event | Effect |
 |------|-------|--------|
 | 2021 | RabbitMQ **3.9** ships **Streams** | RabbitMQ gets a replicated append-only log with offsets + replay |
+| 2022 | RabbitMQ **3.11** ships **super streams** + **single active consumer** | Partitioned streams → ordered, partition-parallel consumption |
 | 2026 | Kafka **4.2** ships **Share Groups** (KIP-932) GA | Kafka gets per-message ack / queue semantics |
 
 Both systems now do both jobs. The page argues the *remaining* difference is:
 **how much the broker knows about each individual message.**
 
 Page's closing recommendation: *start with RabbitMQ, add Kafka when you hit something only Kafka does.*
+It also concedes: *"If you need log compaction, tiered storage, or the Kafka Streams Java library, use Kafka."*
 
 ---
 
@@ -29,15 +31,17 @@ Page's closing recommendation: *start with RabbitMQ, add Kafka when you hit some
 | **Quorum queue** | Raft-replicated log, **fsync before confirm** | Destructive | Work distribution needing data safety / HA |
 | Classic queue | Local per-message persistence | Destructive | Transient, high-churn, single node |
 | **Stream** | Replicated append-only log | **Non-destructive** | Fan-out, replay, big backlogs, high throughput |
-| JMS queue | Raft log, fsync before confirm | Either | JMS apps w/ selectors, queue browsers |
+| JMS queue **(Tanzu)** | Raft log, fsync before confirm | Either | JMS apps w/ selectors, queue browsers |
 | MQTT QoS 0 queue | None | Destructive | Fire-and-forget IoT fanout |
 
 Publishers → **exchange** → **bindings** (routing rules) → queues/streams.
 Routing is decided **broker-side**, *before* storage.
+Exception: **Stream-protocol publishers write straight to the stream leader** — no exchange, no routing step (same shape as a Kafka producer → partition leader). Other protocols can still reach a stream via an exchange binding.
 
 ### Kafka
 
 Topic → partitions (ordered, immutable log) → offsets. Key hashing decides partition **client-side**. Broker never inspects the payload. Consumer group parallelism ≤ partition count (share groups lift that).
+Page's concession: *"This is an excellent design for a log, and it is why Kafka is so hard to beat at replaying terabytes of history."*
 
 ### Mapping table
 
@@ -48,6 +52,7 @@ Topic → partitions (ordered, immutable log) → offsets. Key hashing decides p
 | Offset | Offset | Both track offsets broker-side |
 | Record batch | Chunk | Same amortisation trick |
 | Consumer group | Single active consumer per stream | Same partition-parallel ordered consumption |
+| Producer to partition leader | Stream protocol client to stream leader | Same; RabbitMQ also accepts writes via exchanges from other protocols |
 
 ---
 
@@ -92,7 +97,7 @@ On leader failure, the new leader knows exactly which messages were held by whic
 
 **Kafka contrast:** delivery state and counter are durable, but *acquisition* (who holds it right now) is leader **memory** state. Leader change → in-flight messages flip back to `Available` → **burst of redeliveries**. Fine for at-least-once, painful for expensive work.
 
-### The RabbitMQ per-message toolkit (no Kafka equivalent)
+### The RabbitMQ per-message toolkit (Kafka lacks most of these)
 
 | Feature | What it does |
 |---------|--------------|
@@ -103,8 +108,8 @@ On leader failure, the new leader knows exactly which messages were held by whic
 | Priorities | 32 strict levels — urgent work overtakes the backlog |
 | Dead-letter routing | Rejected messages re-enter *exchanges* → failure paths have the same routing power as success paths |
 | Modified outcome | Consumer annotates the message on return (why it failed, when, which consumer); next consumer sees it; headers exchange can route on it |
-| Poison message handling | Repeated failures get dead-lettered instead of looping forever |
-| Consumer timeouts | Stuck consumer's messages go back to healthy ones |
+| Poison message handling | Repeated failures get dead-lettered instead of looping forever. *Partly covered by share groups (delivery-count limit → archive, no DLX routing).* |
+| Consumer timeouts | Stuck consumer's messages go back to healthy ones. *Partly covered by share groups (acquisition lock timeout).* |
 | Single active consumer / consumer priorities | Hot-standby patterns |
 | Message interceptors | Broker-side custom logic per message |
 | **Backlog convergence** | Acked = deleted = **disk reclaimed**. Queue trends to empty. |
@@ -113,15 +118,16 @@ Kafka: acking does **not** delete. Disk is sized by the **retention window**, no
 
 ### Kafka share groups — what they do and don't fix
 
-**Do provide:** many consumers per partition, per-message ack, durable delivery counting w/ limits, 30s acquisition lock auto-released on consumer death, explicit `release` / `reject` / `renew`.
+**Do provide:** many consumers per partition, per-message ack, durable delivery counting w/ configurable limit, 30s **default** acquisition lock auto-released on consumer death, explicit `release` / `reject` / `renew`.
+Page's concession: *"Share groups close a real gap."* — *"If your requirement is 'spread work items across a variable pool of consumers and retry the failures', that is now a thing Kafka can do."*
 
 **Do NOT provide:**
 
 - Ack ≠ delete (retention still governs disk)
 - No per-message TTL / priorities / delays / deferral / annotated returns
 - No dead-letter **routing** — rejecting archives per share group; reprocessing is DIY
-- **Head-of-line blocking reduced, not eliminated** — in-flight window = share-partition start offset → last fetched offset, capped at **2000 offsets** by default. The start offset only advances when *every* earlier message is terminal. One slow/failing message pins it; once the span hits the cap, **that partition stops being fetched**.
-- Always reads from the **partition leader** (no rack awareness / KIP-392 follower fetch). RabbitMQ quorum queues serve from whichever replica the consumer is connected to — locality for free across AZs/DCs.
+- **Head-of-line blocking reduced, not eliminated** — in-flight window = share-partition start offset → last fetched offset, capped at **2000 offsets** by default (`share.partition.max.record.locks`). The start offset only advances when *every* earlier message is terminal. One slow/failing message pins it; once the span hits the cap, **that partition stops being fetched**.
+- Share groups always read from the **partition leader**. Regular consumer groups *can* fetch from a nearby follower (KIP-392, needs `replica.selector.class` + `client.rack`); share groups can't. RabbitMQ quorum queues serve from whichever replica the consumer is connected to — locality for free across AZs/DCs.
 - No server-side filtering — consumers fetch everything in their partitions and throw away what they don't want.
 - Records stay opaque to the broker — no interceptors, selectors, content routing.
 
@@ -137,7 +143,8 @@ Kafka's own docs: durability *"does not require syncing data to disk"*; the reco
 
 So with `acks=all`, the message is in the **page cache** of every in-sync replica — not necessarily on physical disk. OS writeback can lag by seconds.
 
-**Risk:** correlated failure (whole DC / shared power / same rack) → acknowledged messages are lost. Racks & AZs mitigate this in cloud; a single on-prem facility does not.
+**Risk:** correlated failure (whole DC / shared power / same rack) → acknowledged messages *"but not yet fsynced"* are lost. Racks & AZs mitigate this in cloud; a single on-prem facility does not.
+Page's concession: *"for most cloud deployments that is a perfectly reasonable trade — which is why it is the default."*
 
 ### RabbitMQ quorum queues: replication **and** fsync
 
@@ -147,9 +154,13 @@ Publisher confirm only after a Raft **majority has written and flushed** to disk
 
 | | Replicated | fsync before confirm | Survives site-wide power loss | Cross-site standby |
 |---|---|---|---|---|
-| Kafka topic (stream or queue mode) | Yes | No (discouraged) | **No** | MirrorMaker 2 |
-| RabbitMQ **stream** | Yes | No (same trade as Kafka) | **No** | Warm Standby Replication |
-| RabbitMQ **quorum queue** | Yes | **Yes** | **Yes** | Warm Standby Replication |
+| Kafka topic (stream or queue mode) | Yes | No (discouraged) | **No** — acknowledged messages *can* be lost | MirrorMaker 2 (ships with Apache Kafka) |
+| RabbitMQ **stream** | Yes | No (same trade as Kafka) | **No** — same exposure as Kafka | Warm Standby Replication **(Tanzu)** |
+| RabbitMQ **quorum queue** | Yes | **Yes** | **Yes** | Warm Standby Replication **(Tanzu)** |
+
+Our note (not the page's): open-source RabbitMQ has no Warm Standby Replication — only Shovel/Federation for broker-to-broker message movement. MirrorMaker 2 is free in Apache Kafka.
+
+The page's real point: *"What differs is having the choice at all."* Kafka share groups read ordinary topics, so a work queue gets the same page-cache exposure as an event stream. *"In RabbitMQ you choose per destination: a stream where Kafka's trade is the right one, a quorum queue where it is not, in the same cluster."*
 
 ### Why fsync costs Kafka more (the architectural reason)
 
@@ -186,6 +197,8 @@ Publisher confirm only after a Raft **majority has written and flushed** to disk
 
 ## 6. Protocols
 
+Kafka: *"one wire protocol"* — *"not an independent or formal standard"*, but a de facto one, since Kafka-compatible platforms have emerged. *"The officially maintained client is the Java one."* (Our note: so there is no official Apache Kafka PHP client.)
+
 | Protocol | RabbitMQ | Kafka |
 |----------|----------|-------|
 | AMQP 1.0 (ISO/IEC + OASIS standard) | ✅ | ❌ |
@@ -206,6 +219,8 @@ Kafka equivalent = deploy an MQTT broker + a WebSocket proxy + a JMS bridge, eac
 
 ## 7. Security
 
+Page's framing: *"Both systems are enterprise-grade here, and neither should be a reason to rule the other out."*
+
 | | RabbitMQ | Kafka |
 |---|---|---|
 | Transport | TLS on every protocol + inter-node | TLS on client + inter-broker listeners |
@@ -215,7 +230,7 @@ Kafka equivalent = deploy an MQTT broker + a WebSocket proxy + a JMS bridge, eac
 | Resource protection | Per-vhost/per-user connection & queue limits | Client/broker quotas, request throttling |
 | Credentials | Mgmt UI, HTTP API, CLI, definitions export/import | CLI, Admin API |
 
-vhosts are a **boundary**; Kafka's prefixed topic naming is a **convention**.
+Page claims: vhosts are a **boundary**; Kafka's prefixed topic naming is *"workable, widely used, and rather more of a convention than a boundary."*
 Tanzu adds FIPS 140-2, audit logging (who deleted a queue), continuous CVE scanning.
 
 ---
@@ -224,17 +239,21 @@ Tanzu adds FIPS 140-2, audit logging (who deleted a queue), continuous CVE scann
 
 > *"RabbitMQ is slow" is the most common misconception in the marketplace.*
 
-Numbers quoted by the page:
+Page's tip: *"Both systems can move more messages per second than the overwhelming majority of applications will ever produce."*
+
+Numbers quoted by the page (RabbitMQ's own measurements, no Kafka figures alongside):
 
 | Setup | Throughput |
 |---|---|
 | Single **quorum queue** (replicating **and fsyncing every message**) | ~80,000 msg/s |
 | Single **classic queue** | ~100,000 msg/s |
-| Single **stream** | several million msg/s |
-| Single stream + sub-entry batching | > 4,000,000 msg/s |
-| Five streams | > 17,000,000 msg/s |
+| Single **stream**, *reads*, *"when chunks are well filled"* | several million msg/s |
+| Single stream, sub-entry batching, end-to-end | > 4,000,000 msg/s |
+| Five streams, sub-entry batching, end-to-end | > 17,000,000 msg/s |
 
-Throughput in **both** systems is governed by chunk fullness. One-message-at-a-time is slow in RabbitMQ for the same reason it's slow in Kafka.
+Throughput in **both** systems is governed by chunk fullness. One-message-at-a-time is slow in RabbitMQ for the same reason it's slow in Kafka. The page cites a **20x** difference between well-batched and poorly-batched streams.
+
+Page's conclusion: *"RabbitMQ Streams and Kafka land in the same ballpark on both throughput and latency. Neither has a structural speed advantage over the other here."*
 
 > Warning worth repeating on stage: *a benchmark that tunes one side hard and leaves the other on defaults is comparing tuning effort, not the systems.*
 
