@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="db-forest-configuration">
+    <data version="2">.
+	1:0:4e75da9a-42ec-446b-be28-aaa530153241:NetSuite
+	4:0:f3070f3e-4fdd-474e-a6cd-a3fb6b317958:Monolith
+	7:0:e6653119-c43c-4d2b-ba59-be0d2ef85cb7:Facebook
+	----------------------------------------
+	2:1:a7f6e053-c5bf-43c4-8744-ba6b44509aa6
+	3:1:abbeb552-7e66-4be7-bb6c-b927b353ada7
+	5:4:f29fcd01-8640-40b4-8527-a1eff89e24d6
+	6:4:bf033b4d-aea9-4baf-bc4b-3569efd215fb
+	8:7:23f96161-463e-4013-ab15-1f34114bebd0
+	9:7:4f3a55aa-e7b3-473b-a85a-312e3ce00cc6
+	10:0:e512fbd0-264f-4594-80c9-5f29d738fb56
+		.</data>
+  </component>
+</project>
