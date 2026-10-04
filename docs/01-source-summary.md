@@ -143,7 +143,7 @@ Kafka's own docs: durability *"does not require syncing data to disk"*; the reco
 
 So with `acks=all`, the message is in the **page cache** of every in-sync replica — not necessarily on physical disk. OS writeback can lag by seconds.
 
-**Risk:** correlated failure (whole DC / shared power / same rack) → acknowledged messages *"but not yet fsynced"* are lost. Racks & AZs mitigate this in cloud; a single on-prem facility does not.
+**Risk:** correlated failure (whole DC / shared power / same rack) → acknowledged messages that are *"not yet fsynced"* are lost. Racks & AZs mitigate this in cloud; a single on-prem facility does not.
 Page's concession: *"for most cloud deployments that is a perfectly reasonable trade — which is why it is the default."*
 
 ### RabbitMQ quorum queues: replication **and** fsync
@@ -160,7 +160,7 @@ Publisher confirm only after a Raft **majority has written and flushed** to disk
 
 Our note (not the page's): open-source RabbitMQ has no Warm Standby Replication — only Shovel/Federation for broker-to-broker message movement. MirrorMaker 2 is free in Apache Kafka.
 
-The page's real point: *"What differs is having the choice at all."* Kafka share groups read ordinary topics, so a work queue gets the same page-cache exposure as an event stream. *"In RabbitMQ you choose per destination: a stream where Kafka's trade is the right one, a quorum queue where it is not, in the same cluster."*
+Page's key argument: *"What differs is having the choice at all."* Kafka share groups read ordinary topics, so a work queue gets the same page-cache exposure as an event stream. *"In RabbitMQ you choose per destination: a stream where Kafka's trade is the right one, a quorum queue where it is not, in the same cluster."*
 
 ### Why fsync costs Kafka more (the architectural reason)
 
@@ -271,14 +271,14 @@ Page's conclusion: *"RabbitMQ Streams and Kafka land in the same ballpark on bot
 Kafka = JVM: great JIT, decades of optimisation, world-class profiling, biggest talent pool.
 RabbitMQ = Erlang/BEAM: built at Ericsson for switches that aren't allowed to stop.
 
-Properties RabbitMQ *inherits* rather than builds:
+Page claims (RabbitMQ team's view, not independently verified) — properties RabbitMQ *inherits* rather than builds:
 
 - **Fault isolation** — each connection / session / queue is its own process with its own heap, no shared memory, message passing only. Crash → supervisor restarts in microseconds; everything else continues. A malformed frame from a bad client is a non-event.
 - **Scalability** — processes are cheap; a node hosts millions. One process per connection/queue is the natural unit, not a compromise.
 - **Parallelism without locks** — parsing, routing, dispatching, writing all run in parallel with no app-level locking.
 - **Per-process GC** — pre-emptive scheduler; a major GC pauses **one process**, not the broker. Tail latency doesn't fall off a cliff as memory grows; GC tuning isn't a prerequisite for production.
 
-Kafka's own docs admit object overhead often doubles data size and *"Java garbage collection becomes increasingly fiddly and slow as the in-heap data increases"* — which is exactly why Kafka keeps data off-heap in page cache. Sound engineering, but a workaround for a problem BEAM doesn't have.
+Kafka's own docs admit object overhead often doubles data size and *"Java garbage collection becomes increasingly fiddly and slow as the in-heap data increases"* — which is exactly why Kafka keeps data off-heap in page cache. Page's verdict: *"a sound and well-executed workaround. It is still a workaround for a problem the BEAM does not have."*
 
 ---
 
@@ -291,10 +291,10 @@ Kafka's own docs admit object overhead often doubles data size and *"Java garbag
 - Thousands of independent queues per cluster with amortised fsyncs
 - Per-message delivery state replicated through Raft
 - Broker-side routing (exchanges, bindings, e2e composition) changeable at runtime without touching producers
-- Broker-side filtering (Bloom filters + SQL expressions on streams; JMS selectors on queues)
+- Broker-side filtering (Bloom filters + SQL expressions on streams; JMS selectors on queues **(Tanzu)**)
 - Five protocols in one broker + WebSocket transports
 - Connectable through a plain load balancer (no need to address every node)
-- Local delivery from **any** replica (leader or follower, zero config)
+- Local delivery from **any** replica (leader or follower, zero config) — vs Kafka **share groups**, which *"always read from the partition leader"*; regular consumer groups can follower-fetch via KIP-392 (needs config)
 - Virtual hosts as real tenant boundaries; topic authorisation
 - Native Prometheus + built-in management UI, no agents
 - First-class Windows
@@ -302,11 +302,13 @@ Kafka's own docs admit object overhead often doubles data size and *"Java garbag
 - MQTT at scale (millions of device connections)
 - First-class JMS (Tanzu) — migration path off legacy brokers
 
-### Only Kafka (the page calls these "real and substantial")
+### Only Kafka
+
+Page: *"These are real, they are not small, and if you need one of them then you need Kafka."* Also: *"several are on our long-term roadmap"* (no dates).
 
 | Feature | Detail |
 |---|---|
-| **Tiered storage** (KIP-405) | Offload old segments to object storage → retention decoupled from broker disk. *Nuance: Apache Kafka gives the framework but no out-of-the-box `RemoteStorageManager`; the backend comes from a vendor.* RabbitMQ streams are bounded by local disk. |
+| **Tiered storage** (KIP-405) | Offload old segments to object storage → retention decoupled from broker disk. *Nuance: Apache Kafka gives the framework but no out-of-the-box `RemoteStorageManager`; the backend comes from a vendor or a third-party project.* RabbitMQ streams are bounded by local disk. |
 | **Log compaction** | Keep the last value per key forever → topic as durable changelog; backbone of CDC. RabbitMQ streams retain by size/age only. |
 | **Stream-processing ecosystem** | Flink, Spark, Iceberg, ksqlDB, and the long tail of connectors default to Kafka. Kafka Connect is part of Apache Kafka (though production connectors + Schema Registry are vendor products). |
 | **Kafka Streams** | Java library — joins, windows, aggregations, state stores, exactly-once — inside your app, no extra cluster. |
@@ -330,7 +332,7 @@ Kafka's own docs admit object overhead often doubles data size and *"Java garbag
 | Event streaming w/ replay, multiple readers | **Either** | Same job, same techniques. |
 | Exactly-once read-process-write | **Either** | Kafka: transactional producer. RabbitMQ: source offset as publishing ID. Neither covers external side effects. |
 | Activity tracking, metrics firehose, log aggregation | **Either** | Both do millions/sec — pick on ecosystem/ops. |
-| Stateful stream processing (joins, windows) | **Either** | Kafka's ecosystem is broader. |
+| Stateful stream processing (joins, windows) | **Either** | RabbitMQ side = Apache Spark connector **(Tanzu)**. Kafka's ecosystem is broader (Flink, Kafka Streams). |
 | Months/years of history, cheaply | **Kafka** | Tiered storage. |
 | Event sourcing w/ keyed changelog | **Kafka** | Log compaction. |
 
@@ -340,13 +342,13 @@ Kafka's own docs admit object overhead often doubles data size and *"Java garbag
 
 ## 12. Myths the page retires
 
-| Myth | Verdict |
+| Myth | Page's verdict |
 |---|---|
 | "Kafka for streaming, RabbitMQ for queueing" | True in 2019. Dead since streams (3.9) and share groups (4.2). |
 | "RabbitMQ can't do high throughput" | A single stream does several million msg/s. Folklore predates streams. |
 | "RabbitMQ deletes on consume, so no replay" | True for queues, false for streams. |
 | "RabbitMQ needs lots of RAM" | Classic and quorum queues don't hold bodies in memory; streams use page cache like Kafka. |
-| "Queues for Kafka means you don't need RabbitMQ" | Share groups are genuinely useful, but add none of: TTL, priorities, delays, deferral, annotated returns, routable failure paths, broker routing/filtering, interceptors, disk reclamation — and HOL blocking is reduced, not eliminated. |
-| "Only Kafka does exactly-once" | Both do it; RabbitMQ calls it **"effectively-once"** — the more honest name. |
+| "Queues for Kafka means you don't need RabbitMQ" | Share groups are genuinely useful, but add none of: TTL, priorities, delays, deferral, annotated returns, routable failure paths, broker routing/filtering, interceptors, disk reclamation — and HOL blocking is reduced, not eliminated. Concedes: share groups are *"enough for some work queues"*; *"If none of that matters for your workload, Kafka's queue semantics will serve you well."* |
+| "Only Kafka does exactly-once" | Both produce each read-process-write result downstream once (RabbitMQ: **streams**, source offset as publishing ID); neither executes the processing step only once. RabbitMQ calls it **"effectively-once"** — in the page's words, *"the more honest name"*. |
 | "Erlang is a liability" | You interact via client libs (Java/.NET/Python/Go), UI, CLI, Prometheus — never the broker's source language. |
 | "RabbitMQ replication is bolted on" | That was **mirrored queues**, removed in 4.0. Quorum queues (GA 2019) are Raft-native, continuously Jepsen-tested. |
