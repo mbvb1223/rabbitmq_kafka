@@ -15,15 +15,23 @@ $consumer = new RdKafka\KafkaConsumer($conf);
 $consumer->subscribe(['demo.events']);
 echo "[$who] group '$group' waiting on demo.events\n";
 
+// without close(), a killed member keeps its partitions until session timeout (45 s)
+$running = true;
+pcntl_async_signals(true);
+pcntl_signal(SIGINT, function () use (&$running) { $running = false; });
+pcntl_signal(SIGTERM, function () use (&$running) { $running = false; });
+
 $last = null;
-while (true) {
+while ($running) {
+    $msg = $consumer->consume(1000);
+
+    // checked after consume(): the assignment arrives during the poll
     $parts = array_map(fn (RdKafka\TopicPartition $tp) => $tp->getPartition(), $consumer->getAssignment());
     if ($parts !== $last) {
         echo "[$who] partitions: " . ($parts ? implode(', ', $parts) : 'none (idle)') . "\n";
         $last = $parts;
     }
 
-    $msg = $consumer->consume(1000);
     // php-rdkafka 7 returns null on timeout, 6.x returns an error message
     if ($msg === null || in_array($msg->err, [RD_KAFKA_RESP_ERR__TIMED_OUT, RD_KAFKA_RESP_ERR__PARTITION_EOF], true)) {
         continue;
@@ -37,3 +45,5 @@ while (true) {
     // only moves this group's cursor; the message stays in the topic
     $consumer->commit($msg);
 }
+
+$consumer->close();
