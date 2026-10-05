@@ -1,0 +1,11 @@
+{
+    "name": "rabbitmq-kafka-demo/queue-vs-stream",
+    "description": "Same broker, same client: a quorum queue vs a stream",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "ext-sockets": "*",
+        "ext-mbstring": "*",
+        "php-amqplib/php-amqplib": "^3.7.5"
+    }
+}
