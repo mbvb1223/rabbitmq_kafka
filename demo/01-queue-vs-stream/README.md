@@ -40,7 +40,7 @@ php consume.php queue B        # terminal 2
 php publish.php queue 6        # terminal 3
 ```
 
-- A and B **split** the 6 events per message, to whoever is free (typically A 1, 3, 5 and B 2, 4, 6). Each event is processed once.
+- A and B **split** the 6 events per message, to whoever is free (usually alternating: one gets 1, 3, 5, the other 2, 4, 6). Each event is processed once.
 - The UI shows `qs.queue` at **0** messages: acked events are deleted, and their disk space is reclaimed in the background. Disk tracks the backlog, not a retention window.
 - `php consume.php queue C` started late gets **nothing**. A queue can't replay.
 
