@@ -1,6 +1,0 @@
-#!/bin/sh
-# php-rdkafka is a C extension, so PHP runs in a container on the compose network
-set -e
-dir=$(cd "$(dirname "$0")" && pwd)
-docker image inspect demo-kafka-php >/dev/null 2>&1 || docker build -q -t demo-kafka-php "$dir" >/dev/null
-exec docker run --rm -i --init --network rabbitmq-kafka-demo_default -v "$dir":/app demo-kafka-php php "$@"

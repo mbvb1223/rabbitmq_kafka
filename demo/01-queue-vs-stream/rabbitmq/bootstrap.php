@@ -1,9 +1,8 @@
 <?php
 
-require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/../../lib/rabbitmq.php';
 
 use PhpAmqpLib\Channel\AMQPChannel;
-use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Wire\AMQPTable;
 
 const QUEUE = 'demo.queue';
@@ -11,8 +10,7 @@ const STREAM = 'demo.stream';
 
 function channel(): AMQPChannel
 {
-    $conn = new AMQPStreamConnection(getenv('RABBITMQ_HOST') ?: 'localhost', 5672, 'app', 'app');
-    $ch = $conn->channel();
+    $ch = rabbit();
 
     // php-amqplib defaults (durable=false, exclusive=false) are refused by RabbitMQ 4.3
     $ch->queue_declare(QUEUE, durable: true, auto_delete: false,

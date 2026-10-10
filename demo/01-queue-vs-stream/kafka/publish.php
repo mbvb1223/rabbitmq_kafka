@@ -1,13 +1,11 @@
 <?php
 
+require __DIR__ . '/../../lib/kafka.php';
+
 // php publish.php [count]
 $count = (int) ($argv[1] ?? 6);
 
-$conf = new RdKafka\Conf();
-$conf->set('bootstrap.servers', 'kafka:19092');
-$conf->set('enable.idempotence', 'true');
-
-$producer = new RdKafka\Producer($conf);
+$producer = new RdKafka\Producer(kafka_conf(['enable.idempotence' => 'true']));
 $topic = $producer->newTopic('demo.events');
 
 $at = date('H:i:s');
