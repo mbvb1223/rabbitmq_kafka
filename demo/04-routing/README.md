@@ -90,12 +90,13 @@ A subscription starting with `^` is a regex. With `group.protocol=consumer` (KIP
 ```bash
 ./run regex.php vn-team '^routing\.orders\..*\.vn$'   # terminal 1
 ./run publish.php split                               # terminal 2: order 1 -> routing.orders.created.vn, ...
-../../bin/kafka kafka-topics --create --topic routing.orders.cancelled.vn --partitions 1 --replication-factor 1
+../../bin/kafka kafka-topics --create --topic routing.orders.cancelled.vn --partitions 1 --replication-factor 1   # prints a WARNING about '.' and '_': harmless, see Gotchas
 ./run publish.php orders.cancelled.vn
 ./run publish.php order.cancelled.th                  # a typo
 ```
 
 ```
+[vn-team] +1s topics: none
 [vn-team] +5s topics: routing.orders.created.vn, routing.orders.paid.vn, routing.orders.refunded.vn
 [vn-team] order 8  routing.orders.refunded.vn
 [vn-team] order 3  routing.orders.paid.vn
@@ -107,7 +108,7 @@ A subscription starting with `^` is a regex. With `group.protocol=consumer` (KIP
 ```
 
 - Only the 3 `.vn` topics are assigned and nothing is filtered in PHP, but the producer had to know the slices in advance: 6 topics for 3 events x 2 countries, each with its own partitions.
-- Orders come grouped by topic in whatever order the fetches return (e.g. 3, 7, 1, 6, 8). 3 always comes before 7 and 1 before 6 because they share a partition; there is no order across topics.
+- Orders come grouped by topic in whatever order the fetches return (8, 3, 7, 1, 6 above; another run gave 3, 7, 1, 6, 8). 3 always comes before 7 and 1 before 6 because they share a partition; there is no order across topics.
 - The new topic was picked up ~6-13 s after creation. Order 9 still arrives because the group starts new partitions from `earliest`.
 - The typo prints `failed: Broker: Unknown topic or partition` after 3 s. Kafka can tell you a topic doesn't exist, but never that nobody reads it: an existing topic nobody reads just keeps the data until retention. RabbitMQ's NO_ROUTE means no queue wants this key.
 
@@ -118,7 +119,7 @@ A subscription starting with `^` is a regex. With `group.protocol=consumer` (KIP
 | | RabbitMQ | Kafka |
 |---|---|---|
 | Who decides | the consumer (binding), within the producer's key format | the producer (topic layout) |
-| Add a team with a new slice | one `queue_bind`, nothing else changes | filter client-side, or a new topic + producer change, or a stream job |
+| Add a team with a new slice | one `queue_bind`, nothing else changes | filter client-side, or a new topic + producer change, or a Kafka Streams/Flink job |
 | Cost of filtering | broker matches the key, sends only matches | every group reads the whole topic |
 | One message, many teams | copied into each matching queue | one copy; each group keeps a cursor |
 | Late subscriber | a new binding gets only what's routed after it exists (queue or stream); for history, read a stream bound earlier (demo 01) | can read history (retention permitting) |
@@ -129,7 +130,7 @@ A subscription starting with `^` is a regex. With `group.protocol=consumer` (KIP
 - **Smart broker:** the routing key is metadata the broker reads. Kafka never routes or filters on a message's key, headers or payload, so headers can't route.
 - **Kafka's three answers** for the next team: a client-side filter (cost = teams x volume), topic sprawl (the producer knows every slice, and topics x partitions add up), or a Kafka Streams / Flink job writing a derived topic (another service to run). Only the first two are built here.
 - **Regex subscription doesn't work with the share consumer** (KIP-932), so Kafka's queue can't use Act 2's pattern.
-- **One broker, many protocols:** with `rabbitmq-plugins enable rabbitmq_mqtt`, an MQTT device publishing `orders/paid/vn` arrives on `amq.topic` as `orders.paid.vn`, and a queue bound there with `orders.*.vn` gets it (slide only, not built here). The same in Kafka means an MQTT broker plus a connector.
+- **One broker, many protocols:** with `rabbitmq-plugins enable rabbitmq_mqtt`, an MQTT device publishing `orders/paid/vn` arrives on `amq.topic` (RabbitMQ's built-in topic exchange) as `orders.paid.vn`, and a queue bound there with `orders.*.vn` gets it (slide only, not built here). The same in Kafka means an MQTT broker plus a connector.
 
 ## Gotchas (hit while building this)
 
