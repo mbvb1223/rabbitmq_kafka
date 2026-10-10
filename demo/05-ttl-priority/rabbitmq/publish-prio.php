@@ -9,6 +9,8 @@ use PhpAmqpLib\Message\AMQPMessage;
 
 $ch = channel();
 $ch->confirm_select();
+// without a handler php-amqplib silently drops basic.nack
+$ch->set_nack_handler(fn () => throw new RuntimeException('broker nacked a publish'));
 
 for ($i = 1; $i <= (int) $count; $i++) {
     $ch->basic_publish(new AMQPMessage("p$priority job $i", [

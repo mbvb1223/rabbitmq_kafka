@@ -28,6 +28,7 @@ $running = running();
 // the low messages it already fetched before a later high one
 $high = subscriber('ttl.jobs.high');
 echo "[worker] waiting for ttl.jobs.high partitions\n";
+// run one worker: each topic has 1 partition, so a second worker waits here forever
 while ($running() && partitions($high) === 'none (idle)') {
     if ($msg = kafka_message($high->consume(500))) {
         process($high, $msg);
@@ -42,6 +43,7 @@ while ($running()) {
         continue;
     }
     // only when high looks empty, so a steady stream of high jobs starves low forever
+    // (and after max.poll.interval.ms without a consume(), the low member leaves the group)
     if ($msg = kafka_message($low->consume(100))) {
         process($low, $msg);
     }

@@ -9,6 +9,8 @@ $ttls = array_slice($argv, 1) ?: ['3000'];
 
 $ch = channel();
 $ch->confirm_select();
+// without a handler php-amqplib silently drops basic.nack
+$ch->set_nack_handler(fn () => throw new RuntimeException('broker nacked a publish'));
 
 foreach ($ttls as $i => $ttl) {
     $props = ['delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT, 'timestamp' => time()];
