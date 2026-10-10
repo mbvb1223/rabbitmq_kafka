@@ -6,14 +6,14 @@ require __DIR__ . '/../../lib/kafka.php';
 [, $group, $who, $from] = $argv + [1 => 'workers', 2 => 'worker-' . getmypid(), 3 => 'next'];
 
 $consumer = new RdKafka\KafkaConsumer(kafka_conf([
-    'group.id' => $group,
+    'group.id' => "qs.$group",
     'group.protocol' => 'consumer', // KIP-848: server-side assignment, no stop-the-world rebalance
-    // only used when the group has no committed offset yet
+    // used when the group has no committed offset, or it fell off retention
     'auto.offset.reset' => $from === 'first' ? 'earliest' : 'latest',
     'enable.auto.commit' => 'false',
 ]));
-$consumer->subscribe(['demo.events']);
-echo "[$who] group '$group' waiting on demo.events\n";
+$consumer->subscribe(['qs.events']);
+echo "[$who] group 'qs.$group' waiting on qs.events\n";
 
 $running = running();
 $last = null;

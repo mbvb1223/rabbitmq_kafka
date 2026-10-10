@@ -5,8 +5,16 @@ require __DIR__ . '/../../lib/kafka.php';
 // php publish.php [count]
 $count = (int) ($argv[1] ?? 6);
 
-$producer = new RdKafka\Producer(kafka_conf(['enable.idempotence' => 'true']));
-$topic = $producer->newTopic('demo.events');
+$conf = kafka_conf(['enable.idempotence' => 'true']);
+// flush() returns NO_ERROR once the queue drains, even if some messages failed
+$failed = 0;
+$conf->setDrMsgCb(function (RdKafka\Producer $kafka, RdKafka\Message $msg) use (&$failed): void {
+    if ($msg->err) {
+        $failed++;
+    }
+});
+$producer = new RdKafka\Producer($conf);
+$topic = $producer->newTopic('qs.events');
 
 $at = date('H:i:s');
 for ($i = 1; $i <= $count; $i++) {
@@ -17,4 +25,7 @@ for ($i = 1; $i <= $count; $i++) {
 if ($producer->flush(10_000) !== RD_KAFKA_RESP_ERR_NO_ERROR) {
     throw new RuntimeException('flush timed out');
 }
-echo "published $count -> demo.events\n";
+if ($failed) {
+    throw new RuntimeException("$failed not delivered");
+}
+echo "published $count -> qs.events\n";

@@ -10,6 +10,8 @@ $name = target($mode);
 
 $ch = channel();
 $ch->confirm_select();
+// without a handler php-amqplib silently drops basic.nack
+$ch->set_nack_handler(fn () => throw new RuntimeException('broker nacked a publish'));
 
 $at = date('H:i:s');
 for ($i = 1; $i <= (int) $count; $i++) {
