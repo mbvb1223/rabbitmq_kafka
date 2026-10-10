@@ -1,0 +1,7 @@
+#!/bin/sh
+# bin/kafka <tool> [args]  ->  /opt/kafka/bin/<tool>.sh --bootstrap-server kafka:19092 [args]
+# e.g. bin/kafka kafka-topics --list
+tool=$1; shift
+[ -t 0 ] || notty=-T
+exec docker compose -f "$(dirname "$0")/../../compose.yaml" exec $notty kafka \
+  "/opt/kafka/bin/$tool.sh" --bootstrap-server kafka:19092 "$@"

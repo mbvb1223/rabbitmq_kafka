@@ -1,0 +1,8 @@
+#!/bin/sh
+# php-rdkafka is a C extension, so Kafka scripts run in a container on the compose network.
+# Each demo's kafka/run cd's into its own folder and calls this.
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+docker image inspect demo-kafka-php >/dev/null 2>&1 || docker build -q -t demo-kafka-php "$root/lib" >/dev/null
+exec docker run --rm -i --init --network "${KAFKA_NETWORK:-rabbitmq-kafka-demo_default}" \
+  -e KAFKA_BOOTSTRAP -v "$root":/demo -w "/demo/${PWD#"$root"/}" demo-kafka-php php "$@"

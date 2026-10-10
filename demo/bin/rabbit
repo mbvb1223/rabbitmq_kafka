@@ -1,0 +1,4 @@
+#!/bin/sh
+# bin/rabbit <tool> [args]  e.g. bin/rabbit rabbitmqctl list_queues name messages
+[ -t 0 ] || notty=-T
+exec docker compose -f "$(dirname "$0")/../../compose.yaml" exec $notty rabbitmq "$@"

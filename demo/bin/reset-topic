@@ -1,0 +1,14 @@
+#!/bin/sh
+# bin/reset-topic <topic> <partitions> [more kafka-topics --create args, e.g. --config retention.ms=5000]
+# Deleting a topic also drops every consumer group's committed offsets on it.
+set -e
+bin=$(dirname "$0")
+topic=$1; partitions=$2; shift 2
+"$bin/kafka" kafka-topics --delete --if-exists --topic "$topic"
+# deletion is async: create fails with "marked for deletion" for a few seconds
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  "$bin/kafka" kafka-topics --create --topic "$topic" --partitions "$partitions" --replication-factor 1 "$@" >/dev/null 2>&1 \
+    && { echo "topic $topic: $partitions partition(s) $*"; exit 0; }
+  sleep 1
+done
+"$bin/kafka" kafka-topics --create --topic "$topic" --partitions "$partitions" --replication-factor 1 "$@"
