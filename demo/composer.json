@@ -1,6 +1,6 @@
 {
-    "name": "rabbitmq-kafka-demo/queue-vs-stream",
-    "description": "Same broker, same client: a quorum queue vs a stream",
+    "name": "rabbitmq-kafka-demo/demo",
+    "description": "php-amqplib for every RabbitMQ demo",
     "type": "project",
     "require": {
         "php": ">=8.2",
