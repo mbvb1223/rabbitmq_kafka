@@ -1,0 +1,7 @@
+#!/bin/sh
+# ./rabbit-cli <tool> [args]: runs rabbitmqctl, rabbitmq-queues, ... on the first node that is up
+cd "$(dirname "$0")"
+for n in rabbit-1 rabbit-2 rabbit-3; do
+  docker compose exec -T "$n" true >/dev/null 2>&1 && exec docker compose exec -T "$n" "$@"
+done
+echo "no RabbitMQ node is running"; exit 1

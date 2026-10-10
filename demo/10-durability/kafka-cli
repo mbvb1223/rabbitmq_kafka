@@ -1,0 +1,8 @@
+#!/bin/sh
+# ./kafka-cli <tool> [args]  ->  /opt/kafka/bin/<tool>.sh on this demo's cluster
+# Runs in the controller container, the one node this demo never kills. The grep drops the
+# connection warnings + stack traces the tools print for every stopped broker.
+tool=$1; shift
+docker compose -f "$(dirname "$0")/compose.yaml" exec -T controller \
+  "/opt/kafka/bin/$tool.sh" --bootstrap-server kafka-1:19092,kafka-2:19092,kafka-3:19092 "$@" 2>&1 \
+  | grep -vE '^[[:space:]]+at |UnknownHostException|WARN .*(resolve server|Error connecting|Connection to node)'

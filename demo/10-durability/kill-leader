@@ -1,0 +1,30 @@
+#!/bin/sh
+# ./kill-leader <topic or queue> [stall-seconds]
+# SIGKILLs the node leading the Kafka partition / quorum queue (no clean shutdown). With stall-seconds,
+# first freezes both followers that long (a GC pause, a network blip): behind, but still members.
+cd "$(dirname "$0")"
+case "$1" in
+durable.orders)
+  prefix=rabbit
+  leader=$(./rabbit-cli rabbitmq-queues quorum_status "$1" --formatter=json 2>/dev/null \
+    | php -r 'foreach (json_decode(stream_get_contents(STDIN), true) as $r) if ($r["Raft State"] === "leader") echo substr($r["Node Name"], -1);')
+  ;;
+*)
+  prefix=kafka
+  leader=$(./kafka-cli kafka-topics --describe --topic "$1" | sed -n 's/.*Leader: \([0-9]*\).*/\1/p' | head -1)
+  ;;
+esac
+[ -n "$leader" ] || { echo "no leader found for $1"; exit 1; }
+followers=$(for n in 1 2 3; do [ "$n" != "$leader" ] && printf '%s-%s ' "$prefix" "$n"; done)
+echo "$(date -u +%T) $1: leader $prefix-$leader, followers $followers"
+if [ -n "$2" ]; then
+  echo "$(date -u +%T) docker pause $followers for $2 s"
+  docker compose pause $followers >/dev/null 2>&1
+  sleep "$2"
+fi
+echo "$(date -u +%T) docker kill $prefix-$leader"
+docker compose kill "$prefix-$leader" >/dev/null 2>&1
+if [ -n "$2" ]; then
+  docker compose unpause $followers >/dev/null 2>&1
+  echo "$(date -u +%T) docker unpause $followers"
+fi

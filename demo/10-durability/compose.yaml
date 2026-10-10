@@ -1,0 +1,103 @@
+# 3-node clusters for demo 10. Run one profile at a time, the main stack keeps running:
+#   docker compose -f compose.yaml --profile kafka up -d
+#   docker compose -f compose.yaml --profile rabbitmq up -d
+name: rabbitmq-kafka-durable
+
+x-broker: &broker
+  image: apache/kafka:4.3.1
+  profiles: [kafka]
+  depends_on: [controller]
+
+x-broker-env: &broker-env
+  CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
+  KAFKA_PROCESS_ROLES: broker
+  # a separate controller: killing 2 of 3 brokers must not also kill the metadata quorum,
+  # otherwise the ISR can't shrink and you get timeouts instead of NOT_ENOUGH_REPLICAS
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 100@controller:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LISTENERS: INTERNAL://:19092
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+  # Docker has ~4 GB on a laptop; 3 brokers at the 1 GB default don't fit next to the main stack
+  KAFKA_HEAP_OPTS: -Xmx192m -Xms192m
+  KAFKA_JVM_PERFORMANCE_OPTS: -XX:+UseSerialGC -XX:MaxMetaspaceSize=96m
+  # the log cleaner allocates 128 MB up front, which alone OOMs a 192 MB heap
+  KAFKA_LOG_CLEANER_DEDUPE_BUFFER_SIZE: 16777216
+
+x-rabbit: &rabbit
+  image: rabbitmq:4.3.6-management
+  profiles: [rabbitmq]
+  environment: &rabbit-env
+    RABBITMQ_DEFAULT_USER: app
+    RABBITMQ_DEFAULT_PASS: app
+    # nodes only cluster when they share an Erlang cookie
+    RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: -setcookie durable-demo
+    RABBITMQ_CTL_ERL_ARGS: -setcookie durable-demo
+  configs:
+    - source: rabbitmq.conf
+      target: /etc/rabbitmq/conf.d/90-cluster.conf
+
+services:
+  controller:
+    image: apache/kafka:4.3.1
+    profiles: [kafka]
+    hostname: controller
+    environment:
+      CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
+      KAFKA_NODE_ID: 100
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 100@controller:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: CONTROLLER://:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT
+      KAFKA_HEAP_OPTS: -Xmx128m -Xms128m
+      KAFKA_JVM_PERFORMANCE_OPTS: -XX:+UseSerialGC -XX:MaxMetaspaceSize=96m
+
+  kafka-1:
+    <<: *broker
+    hostname: kafka-1
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 1
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-1:19092
+
+  kafka-2:
+    <<: *broker
+    hostname: kafka-2
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 2
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-2:19092
+
+  kafka-3:
+    <<: *broker
+    hostname: kafka-3
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 3
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-3:19092
+
+  rabbit-1:
+    <<: *rabbit
+    hostname: rabbit-1
+    ports: ["5681:5672", "15681:15672"]
+
+  rabbit-2:
+    <<: *rabbit
+    hostname: rabbit-2
+    ports: ["5682:5672"]
+
+  rabbit-3:
+    <<: *rabbit
+    hostname: rabbit-3
+    ports: ["5683:5672"]
+
+configs:
+  rabbitmq.conf:
+    content: |
+      cluster_formation.peer_discovery_backend = classic_config
+      cluster_formation.classic_config.nodes.1 = rabbit@rabbit-1
+      cluster_formation.classic_config.nodes.2 = rabbit@rabbit-2
+      cluster_formation.classic_config.nodes.3 = rabbit@rabbit-3
