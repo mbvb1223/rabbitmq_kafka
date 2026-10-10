@@ -13,4 +13,4 @@ docker run -d --rm --name share.stuck --network "${KAFKA_NETWORK:-rabbitmq-kafka
 echo "share.stuck joining share.workers..."
 sleep 10
 docker pause share.stuck >/dev/null
-echo "share.stuck is frozen. Publish now: it will hold one record until the 30 s lock expires"
+echo "share.stuck is frozen. Start terminal 2 and publish within ~40 s (its long-poll expires after that and all 3 jobs print at once)"

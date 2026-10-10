@@ -13,7 +13,7 @@ $ch->basic_qos(0, 1, false);
 
 echo "[$who] waiting on " . JOBS . "\n";
 $ch->basic_consume(JOBS, no_ack: false, callback: function (AMQPMessage $msg) use ($who): void {
-    // quorum queues count deliveries; the header is absent on the first one
+    // x-delivery-count counts failed deliveries (reject, crash), absent on the first; nack and consumer timeout don't count
     $headers = $msg->has('application_headers') ? $msg->get('application_headers')->getNativeData() : [];
     $delivery = ($headers['x-delivery-count'] ?? 0) + 1;
     echo "[$who] {$msg->getBody()}  (delivery $delivery)\n";

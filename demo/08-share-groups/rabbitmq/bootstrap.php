@@ -17,7 +17,7 @@ function channel(): AMQPChannel
         arguments: new AMQPTable(['x-queue-type' => 'quorum']));
     $ch->queue_bind(DEAD, 'share.dlx');
 
-    // same limit as Kafka's share.delivery.count.limit default, but here the message gets a destination
+    // same number as Kafka's default share.delivery.count.limit, but 5 returns = 6 deliveries; here the message gets a destination
     $ch->queue_declare(JOBS, durable: true, auto_delete: false, arguments: new AMQPTable([
         'x-queue-type' => 'quorum',
         'x-delivery-limit' => 5,
