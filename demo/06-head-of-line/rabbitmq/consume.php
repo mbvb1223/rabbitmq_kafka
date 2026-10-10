@@ -14,7 +14,7 @@ $ch->basic_qos(0, (int) $prefetch, false);
 
 echo "[$who] waiting on $name (prefetch $prefetch)\n";
 
-$ch->basic_consume($name, no_ack: false, callback: function (AMQPMessage $msg) use ($who): void {
+$ch->basic_consume($name, consumer_tag: $who, no_ack: false, callback: function (AMQPMessage $msg) use ($who): void {
     echo "[$who] " . work($msg->getBody()) . ($msg->isRedelivered() ? '  (redelivered)' : '') . "\n";
     $msg->ack();
 });

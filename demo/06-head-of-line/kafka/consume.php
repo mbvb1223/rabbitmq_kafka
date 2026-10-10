@@ -33,7 +33,13 @@ while ($running()) {
     }
 
     try {
-        echo "[$who] " . work($msg->payload, poison: $mode !== 'slow') . "  (partition {$msg->partition}, offset {$msg->offset})\n";
+        $done = work($msg->payload, poison: $mode !== 'slow');
+        // Ctrl-C cuts usleep() short (async signals), so the job didn't really finish
+        if (!$running()) {
+            echo "[$who] interrupted at partition {$msg->partition}, offset {$msg->offset}: not committed\n";
+            break;
+        }
+        echo "[$who] $done  (partition {$msg->partition}, offset {$msg->offset})\n";
     } catch (RuntimeException $e) {
         if ($mode === 'poison') {
             echo "[$who] CRASH on {$e->getMessage()} at partition {$msg->partition}, offset {$msg->offset}. Exit without commit\n";
@@ -43,7 +49,10 @@ while ($running()) {
         }
         // dlq: park the job and commit past it, so the partition moves again
         $dlq->produce(RD_KAFKA_PARTITION_UA, 0, $msg->payload, $msg->key);
-        $producer->flush(10_000);
+        if ($producer->flush(10_000) !== RD_KAFKA_RESP_ERR_NO_ERROR) {
+            echo "[$who] DLQ write failed, offset {$msg->offset} not committed\n";
+            break;
+        }
         echo "[$who] {$e->getMessage()}: parked in hol.dlq, committing past offset {$msg->offset}\n";
     }
     $consumer->commit($msg);
