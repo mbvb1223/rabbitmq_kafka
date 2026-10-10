@@ -13,17 +13,21 @@ PHP runs one consumer per process, so "go faster" means "start more processes". 
 |---|---|---|
 | A worker gets | the next message(s), up to `prefetch` unacked | whole partitions |
 | Useful workers | as many as there are jobs in flight | at most the partition count |
-| Watch it | UI → Queues → `scale.jobs`: Consumers, Unacked | `../../bin/kafka kafka-consumer-groups --describe --group scale.workers --members` |
+| Watch it | UI → Queues → `scale.jobs`: Consumers, Unacked (only the ~10 s runs last long enough to see) | `../../bin/kafka kafka-consumer-groups --describe --group scale.workers --members` |
 
 ## Setup
 
-One-time setup is in [../README.md](../README.md). Then, before each run:
+One-time setup is in [../README.md](../README.md). Then, once before you start (and any time you want a clean slate; it also undoes Kafka Act 2's `--alter`):
 
 ```bash
 ./reset.sh      # deletes queue scale.jobs, recreates topic scale.jobs with 4 partitions
 ```
 
-Both sides use `bench.php <workers>`: it forks N worker processes ([fleet.php](fleet.php)), waits until they're ready, publishes 200 jobs that each `usleep(50_000)` (I/O-bound, like an HTTP call), waits until all 200 are done, then prints jobs per worker, idle workers and wall time.
+UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081>.
+
+Both sides use `bench.php <workers>`: it forks N worker processes ([fleet.php](fleet.php)), waits until they're ready, publishes 200 jobs that each `usleep(50_000)` (I/O-bound, like an HTTP call), waits until all 200 are done, then prints jobs per worker, idle workers and wall time. The clock starts when the jobs are published, so Kafka's settle wait is not included (see Compare: "A new worker starts working").
+
+`rabbitmq/bench.php` forks on the host, so it needs `ext-pcntl` and `ext-posix` (`php -m | grep -E 'pcntl|posix'`). Native Windows PHP has neither; use WSL.
 
 ---
 
@@ -43,25 +47,31 @@ php bench.php 20
 | 4 | 50 each | 2.57 s | 77 |
 | 20 | 10 each | 0.52 s | 383 |
 
-- Time drops linearly. Workers are ready in milliseconds: no rebalance, no settle time.
+- Throughput grows linearly (time ∝ 1/workers). Workers are ready in milliseconds: no rebalance (unlike Kafka), no settle time.
 - I/O-bound jobs scale far past the CPU count (8 here). CPU-bound jobs would stop at the core count.
 
 ### Act 2: the prefetch trap
 
+Prefetch (`$ch->basic_qos(0, N, false)`) is the most unacked messages the broker pushes to one consumer before it waits for an ack. 0 means unlimited, and so does never calling `basic_qos`. Act 1 ran with bench.php's default of 10.
+
 ```bash
 php bench.php 4 --backlog --prefetch=0    # publish first, then start workers 100 ms apart, no prefetch limit
 php bench.php 4 --backlog                 # same, with prefetch 10
+php bench.php 20 --backlog --prefetch=0   # terminal 1, ~10 s
+../../bin/rabbit rabbitmqctl list_queues name messages_unacknowledged consumers   # terminal 2, repeat while it runs
 ```
 
 - Prefetch 0: `w01 200, w02-w04 0`, **10.41 s**, as slow as one worker. The first worker gets all 200 pushed into its buffer before the second one connects.
-- During a `20 --backlog --prefetch=0` run, `../../bin/rabbit rabbitmqctl list_queues name messages_unacknowledged consumers` shows the backlog as unacked with 20 consumers (`199`, then `75` at 8 s as w01 works through it; the counts lag ~5 s). It looks healthy, but 19 workers are idle.
-- Prefetch 10: 53 / 51 / 49 / 47, 2.76 s. **Always set `basic_qos`.**
+- Terminal 2: stats refresh every 5 s, so the first calls print `0 0`. Then the backlog shows as unacked with 20 consumers (~100-150, shrinking as w01 works through it). It looks healthy, but 19 workers are idle.
+- Prefetch 10: 53 / 51 / 49 / 47, 2.76 s. **Always set `basic_qos`**: 1 gives the fairest split for slow jobs (RabbitMQ tutorial 2), higher values (tens to hundreds) save round trips on fast ones.
 
 ---
 
 ## Kafka (`cd kafka`)
 
-Each run first waits **~10-15 s** for the group to settle and prints its progress. That wait is part of the lesson: the first member grabs all 4 partitions, and the others get theirs on later heartbeats (every 5 s).
+The workers use Kafka's new consumer group protocol (KIP-848; bench.php opts in with `group.protocol=consumer`). The broker decides which member owns which partition, and each member picks up changes on its next heartbeat (every 5 s by default). Moving partitions between members is a *rebalance*.
+
+Each run first waits **~7-18 s** for the group to settle and prints its progress. That wait is part of the lesson: the first member grabs all 4 partitions, and the others get theirs on later heartbeats (every 5 s, the broker default).
 
 ### Act 1: 1 → 4 → 20 workers
 
@@ -78,7 +88,7 @@ Each run first waits **~10-15 s** for the group to settle and prints its progres
 | 20 | **4, 16 idle** | **2.59 s** | 77 |
 
 - 20 workers are no faster than 4. The table shows `partitions: -` for the 16 idle ones.
-- In a second terminal during the 20-worker run, `../../bin/kafka kafka-consumer-groups --describe --group scale.workers --members` lists 20 members, 16 of them with `#PARTITIONS 0`.
+- In a second terminal, once the progress line reads `4/4 partitions owned by 4/20 workers` (you then have ~8 s before the run ends), run `../../bin/kafka kafka-consumer-groups --describe --group scale.workers --members`: 20 members, 16 with `#PARTITIONS 0`. Earlier, you see `Warning: ... is rebalancing` and one member holding all 4 partitions: that is the settle, not the ceiling.
 
 ### Act 2: add partitions
 
@@ -90,10 +100,11 @@ Each run first waits **~10-15 s** for the group to settle and prints its progres
 - `busy 20/20`, 10 jobs each, **0.52 s**, same as RabbitMQ. So why not always do this?
   - **It only goes up.** `--partitions 2` fails: `The topic scale.jobs currently has 20 partition(s); 2 would not be an increase.`
   - **Keys move.** The partition is `hash(key) % count`, so after the change most keys map to a new partition. Old messages for key K are still queued in the old partition while new ones land in the new one, so two workers can process K at once. Per-key ordering breaks during the switch.
-  - **So you plan it up front:** partitions = the most workers you will ever run, decided the day you create the topic.
-- `./reset.sh` puts the topic back to 4 partitions.
+  - **Late starts.** Consumers with `auto.offset.reset=latest` can miss the first records on new partitions, before they discover them (bench.php uses `earliest`).
+  - **So you size it up front:** growing works online (you just did it) but remaps keys, and shrinking is impossible. Unkeyed jobs can simply over-partition.
+- `../reset.sh` puts the topic back to 4 partitions.
 
-Share groups (Kafka 4.2+) hand out records instead of partitions, which removes the ceiling, but php-rdkafka has no binding for them. See demo 08.
+Share groups (Kafka 4.2+) let many members read one partition and lock records one by one. That removes the partition ceiling (up to 200 members by default) but gives up per-partition ordering, the thing the ceiling paid for. php-rdkafka has no binding for them. See demo 08.
 
 ---
 

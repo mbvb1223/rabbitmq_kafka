@@ -15,9 +15,11 @@ final class Fleet
     private array $buffers = [];
 
     // $work(int $id, Closure $report) runs in the child; it must return when it gets SIGTERM.
-    // Create clients inside $work: librdkafka threads and AMQP sockets don't survive a fork.
+    // Create clients inside $work: librdkafka threads don't survive a fork, and an AMQP connection can't be shared between processes.
     public function __construct(int $workers, Closure $work, float $stagger = 0)
     {
+        // before forking, so the workers' signal handlers fire wherever they block
+        pcntl_async_signals(true);
         for ($id = 1; $id <= $workers; $id++) {
             if ($id > 1) {
                 usleep((int) ($stagger * 1_000_000));
@@ -39,7 +41,6 @@ final class Fleet
         $this->lastChange = microtime(true);
 
         // docker's --init forwards Ctrl-C to this process only, so pass it on to the workers
-        pcntl_async_signals(true);
         pcntl_signal(SIGINT, function () {
             $this->stop();
             exit(130);

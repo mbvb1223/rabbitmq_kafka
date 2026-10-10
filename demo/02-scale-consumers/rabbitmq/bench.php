@@ -48,7 +48,7 @@ $work = function (int $id, Closure $report) use ($prefetch, $run): void {
     pcntl_signal(SIGINT, function () use (&$running) { $running = false; });
 
     $ch = declare_queue();
-    // 0 = unlimited: the broker pushes as many unacked messages as this consumer can buffer
+    // 0 = unlimited: the broker pushes every ready message to the first consumer that attaches
     $ch->basic_qos(0, $prefetch, false);
     $ch->basic_consume(QUEUE, no_ack: false, callback: function (AMQPMessage $msg) use ($run, $report) {
         if (str_starts_with($msg->getBody(), $run)) {
