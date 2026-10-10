@@ -18,7 +18,11 @@ rabbitmq)
   docker compose --profile rabbitmq start >/dev/null 2>&1
   rm -f rabbitmq/confirmed-*.log
   ./rabbit-cli rabbitmqctl delete_queue durable.classic >/dev/null 2>&1
-  RABBITMQ_PORT=5681 php rabbitmq/bootstrap.php
+  # right after `up -d` the nodes are still booting: a quorum queue declared now gets only the nodes
+  # that have joined, and rabbit-1 may refuse the connection. PHP CLI prints fatals on stdout.
+  until ./rabbit-cli rabbitmqctl await_online_nodes 3 >/dev/null 2>&1; do sleep 2; done
+  until out=$(RABBITMQ_PORT=5681 php rabbitmq/bootstrap.php 2>&1); do sleep 2; done
+  echo "$out"
   ./rabbit-cli rabbitmq-queues quorum_status durable.orders --formatter=json 2>/dev/null \
     | php -r 'foreach (json_decode(stream_get_contents(STDIN), true) as $r) echo "  {$r["Node Name"]}: {$r["Raft State"]}\n";'
   ;;

@@ -11,8 +11,7 @@ x-broker: &broker
 x-broker-env: &broker-env
   CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
   KAFKA_PROCESS_ROLES: broker
-  # a separate controller: killing 2 of 3 brokers must not also kill the metadata quorum,
-  # otherwise the ISR can't shrink and you get timeouts instead of NOT_ENOUGH_REPLICAS
+  # a separate controller, so the metadata quorum survives 2 dead brokers (combined mode untested)
   KAFKA_CONTROLLER_QUORUM_VOTERS: 100@controller:9093
   KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
   KAFKA_LISTENERS: INTERNAL://:19092

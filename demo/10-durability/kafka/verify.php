@@ -19,8 +19,13 @@ $present = [];
 $records = 0;
 while (true) {
     $msg = $consumer->consume(10_000);
-    if ($msg === null || $msg->err === RD_KAFKA_RESP_ERR__PARTITION_EOF || $msg->err === RD_KAFKA_RESP_ERR__TIMED_OUT) {
+    if ($msg === null || $msg->err === RD_KAFKA_RESP_ERR__PARTITION_EOF) {
         break;
+    }
+    // without this, an unreachable leader would look like "everything LOST"
+    if ($msg->err === RD_KAFKA_RESP_ERR__TIMED_OUT) {
+        fwrite(STDERR, "no data for 10 s: is the partition leader up?\n");
+        exit(1);
     }
     if ($msg->err) {
         throw new RuntimeException($msg->errstr());
