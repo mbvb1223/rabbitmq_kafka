@@ -9,8 +9,8 @@ services:
       RABBITMQ_DEFAULT_USER: app
       RABBITMQ_DEFAULT_PASS: app
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_UI_PORT:-15672}:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 5s
@@ -45,22 +45,6 @@ services:
       interval: 5s
       timeout: 15s
       retries: 20
-
-  kafka-init:
-    image: apache/kafka:4.3.1
-    depends_on:
-      kafka:
-        condition: service_healthy
-    # Demo B needs exactly 4 partitions so workers 5-20 sit idle
-    command:
-      - /opt/kafka/bin/kafka-topics.sh
-      - --bootstrap-server=kafka:19092
-      - --create
-      - --if-not-exists
-      - --topic=jobs
-      - --partitions=4
-      - --replication-factor=1
-    restart: "no"
 
   kafka-ui:
     image: kafbat/kafka-ui:v1.5.0
