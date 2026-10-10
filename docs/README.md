@@ -6,6 +6,7 @@
 | [02-related-research.md](02-related-research.md) | Bias audit of that page, independently verified facts, the benchmark caveats, and the **PHP ecosystem angle** (php-amqplib vs php-rdkafka, no official PHP stream client, the parallelism ceiling) |
 | [03-topic-proposal.md](03-topic-proposal.md) | **← the deliverable.** Proposed title, 5 main points, 2 PHP demos, 16-slide skeleton, takeaway slide, Q&A risks, open questions |
 | [news/](news/README.md) | Research pack (Oct 2026): 9 files — comparison posts, news, benchmarks, share groups vs streams, case studies, PHP clients, Q&A/myths. **Start with its README** — demo fixes + corrections to 02/03 |
+| [../demo/](../demo/README.md) | **Hands-on demos 01-10**, each one claim on both brokers, verified on 4.3.6 / 4.3.1; [99-final](../demo/99-final/README.md) = comparison matrix + stage picks |
 
 **Status:** proposal drafted, awaiting approval/edits. Versions pinned to Kafka 4.3 / RabbitMQ 4.3.
 

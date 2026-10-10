@@ -23,7 +23,7 @@ Pinned to `rabbitmq:4.3.6-management` / `apache/kafka:4.3.1`. Every file has its
 | 1 | Blocker | php-amqplib default `queue_declare('jobs')` (non-durable, non-exclusive) closes the connection on 4.3 — `transient_nonexcl_queues` denied by default | Declare durable quorum: `queue_declare('jobs', false, true, false, false, false, new AMQPTable(['x-queue-type' => 'quorum']))` | 01, 08 |
 | 2 | Major | librdkafka defaults: idempotence off (retries can reorder), auto offset store marks messages before processing | `enable.idempotence=true`; `enable.auto.offset.store=false` + store/commit after processing | 09 |
 | 3 | Major | `php:8.4-cli` (Debian trixie) ships librdkafka 2.8.0 — too old for KIP-848 (GA 2.12) | Use `php:8.4-cli-alpine` (2.14.1) if showing KIP-848; Demo B (classic) is fine | 08 |
-| 4 | Minor | In a local test, `nack` with requeue didn't count toward `x-delivery-limit`, `reject` did | Use `basic_reject` in the poison-message demo, or re-test | 01 |
+| 4 | Minor | In a local test, `nack` with requeue didn't count toward `x-delivery-limit`, `reject` did | Use `basic_reject` in the poison-message demo. Verified in demo 03: `nack` also starves the jobs behind it | 01 |
 | 5 | Minor | `basic_qos(global=true)` silently per-consumer on 4.3 | Don't rely on global prefetch | 08 |
 
 ## Corrections to `../03-topic-proposal.md` / `../02-related-research.md`
