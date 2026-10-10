@@ -62,7 +62,7 @@ php bench.php 20 --backlog --prefetch=0   # terminal 1, ~10 s
 ```
 
 - Prefetch 0: `w01 200, w02-w04 0`, **10.41 s**, as slow as one worker. The first worker gets all 200 pushed into its buffer before the second one connects.
-- Terminal 2: stats refresh every 5 s, so the first calls print `0 0`. Then the backlog shows as unacked with 20 consumers (~100-150, shrinking as w01 works through it). It looks healthy, but 19 workers are idle.
+- Terminal 2: stats refresh every 5 s, so the first calls print stale numbers (`0 0`, or `200 1` before the others connect). Then the backlog shows as unacked with 20 consumers (~100-150, shrinking as w01 works through it). It looks healthy, but 19 workers are idle.
 - Prefetch 10: 53 / 51 / 49 / 47, 2.76 s. **Always set `basic_qos`**: 1 gives the fairest split for slow jobs (RabbitMQ tutorial 2), higher values (tens to hundreds) save round trips on fast ones.
 
 ---
@@ -113,31 +113,31 @@ Share groups (Kafka 4.2+) let many members read one partition and lock records o
 | | RabbitMQ quorum queue | Kafka consumer group |
 |---|---|---|
 | 20 workers, 200 jobs × 50 ms | **0.52 s**, 20 busy | **2.59 s**, 4 busy, 16 idle (4 partitions) |
-| Scaling knob | start more processes | partitions (fixed up front, can't shrink) **and** processes |
-| A new worker starts working | immediately | after the group settles (~10 s here) |
-| What you get for the limit | no ordering across workers | ordering per partition (per key) |
-| Autoscale on | queue depth (e.g. KEDA RabbitMQ scaler) | consumer lag, capped at the partition count |
+| Scaling knob | start more processes | partitions (grow-only, growing remaps keys) **and** processes |
+| A new worker starts working | immediately | after up to 2 heartbeats (~10 s at the 5 s default); the members that already have partitions keep working meanwhile |
+| Ordering (the trade-off) | none across workers | per partition (per key) |
+| Autoscale on | queue depth (e.g. the KEDA RabbitMQ scaler for Kubernetes) | consumer lag, capped at the partition count |
 
 ## Talking points
 
-- **"Your partition count is your max worker count, and you pick it the day you create the topic."**
+- **"Your partition count is your max worker count, and it only goes up."**
 - The ceiling is the price of per-key ordering. That trade is fair. It just costs a PHP shop more: Java fans out with threads inside one consumer, and PHP's escape hatches (RoadRunner, Swoole, AMPHP) cost per-key ordering or a new runtime.
-- RabbitMQ's flip side: competing consumers don't preserve order. Single active consumer (demo 06) gets ordering back, along with a ceiling of 1.
+- RabbitMQ's flip side: competing consumers don't preserve order. Single active consumer (demo 06) gets it back with a ceiling of 1; per-key order with N workers means a consistent-hash exchange into N queues, each with single active consumer. That is partitions by hand, with the same ceiling.
 - The prefetch trap makes RabbitMQ look exactly like Kafka's idle workers. If a demo shows "RabbitMQ doesn't scale", check `basic_qos` first.
 
 ## Gotchas (hit while building this)
 
 - **KIP-848 settle time.** With 4 workers, one member owned all 4 partitions at 0.1 s, and the rest only got theirs at ~10 s. Publishing before then skews the result, so `bench.php` waits until every partition has an owner and nothing has moved for 6 s.
 - **Partition `"0"` is falsy in PHP.** `array_filter($assigned)` and `$p ?: '-'` silently dropped the worker that owned partition 0. Compare with `''` instead.
-- **Ctrl-C in a container.** `docker run --init` forwards SIGINT to PID 1 only, so `Fleet` passes it on and the children `close()`. Afterwards `--describe` says `has no active members`. Without that, the dead members keep their partitions for the 45 s session timeout and the next run sits idle.
-- **Declare the queue before forking.** Right after `reset.sh`, 20 workers racing to create the fresh quorum queue got `AMQPBasicCancelException: Channel was canceled` and the bench hung at 100/200. `bench.php` now declares it once in the parent.
-- **Fork before creating any client.** librdkafka threads and AMQP sockets don't survive `pcntl_fork()`.
+- **Ctrl-C in a container.** `docker run --init` forwards Ctrl-C to the PHP parent only, not to its forked workers, so `Fleet` passes it on and the children `close()`. Afterwards `--describe` says `has no active members`. Without that, the dead members keep their partitions for the 45 s session timeout and the next run sits idle.
+- **Declare the queue before forking.** Right after `reset.sh`, 20 workers racing to create the fresh quorum queue got `AMQPBasicCancelException: Channel was canceled` and the bench hung at 100/200. `bench.php` now declares it once in the parent **and closes that connection before forking**.
+- **Don't carry a client across `pcntl_fork()`.** librdkafka's background threads don't survive it, and an AMQP connection shared by two processes interleaves frames. Each worker creates its own.
 - **The prefetch trap is a race without the stagger.** Four workers forked at the same instant sometimes split the backlog evenly even with prefetch 0 (1 run in 5, right after `reset.sh`). In production the trap is reliable, because workers start one by one.
 - **Leftover jobs.** Every run tags its jobs with a run id and skips any others, so an aborted run can't inflate the next count.
 
 ## Checklist
 
-- [ ] RabbitMQ Act 1: 1 → 4 → 20 workers, and the time drops linearly
+- [ ] RabbitMQ Act 1: 1 → 4 → 20 workers, and throughput grows linearly
 - [ ] RabbitMQ Act 2: reproduced the prefetch trap (1 busy, the rest idle) and fixed it with prefetch 10
 - [ ] Kafka Act 1: 20 workers on 4 partitions → 16 idle, same time as 4; saw `#PARTITIONS 0` in `--describe --members`
 - [ ] Kafka Act 2: added partitions and it scaled; I can give 2 reasons that isn't free
