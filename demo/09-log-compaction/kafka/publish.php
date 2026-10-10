@@ -5,12 +5,20 @@ require __DIR__ . '/../../lib/kafka.php';
 // php publish.php [updates|tick]
 $what = $argv[1] ?? 'updates';
 
-$producer = new RdKafka\Producer(kafka_conf(['enable.idempotence' => 'true']));
+$conf = kafka_conf(['enable.idempotence' => 'true']);
+// flush() returns NO_ERROR once the queue drains, even if some messages failed
+$failed = 0;
+$conf->setDrMsgCb(function (RdKafka\Producer $kafka, RdKafka\Message $msg) use (&$failed): void {
+    if ($msg->err) {
+        $failed++;
+    }
+});
+$producer = new RdKafka\Producer($conf);
 $topic = $producer->newTopic('compact.users');
 
 $records = $what === 'tick'
     // compaction never touches the active segment: one more record after segment.ms rolls it
-    ? [['tick', 'tick @ ' . date('H:i:s')]]
+    ? [['tick', 'tick @ ' . gmdate('H:i:s') . ' UTC']]
     : [
         ['user-1', 'name=An v1'],
         ['user-2', 'name=Binh v1'],
@@ -28,5 +36,8 @@ foreach ($records as [$key, $value]) {
 
 if ($producer->flush(10_000) !== RD_KAFKA_RESP_ERR_NO_ERROR) {
     throw new RuntimeException('flush timed out');
+}
+if ($failed) {
+    throw new RuntimeException("$failed not delivered");
 }
 echo 'published ' . count($records) . " -> compact.users\n";

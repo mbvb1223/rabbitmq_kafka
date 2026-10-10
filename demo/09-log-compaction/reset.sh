@@ -2,6 +2,7 @@
 # Deletes and recreates everything this demo uses
 cd "$(dirname "$0")"
 ../bin/rabbit rabbitmqctl delete_queue compact.users >/dev/null 2>&1
+../bin/kafka kafka-consumer-groups --delete --group compact.reader --group compact.rebuild >/dev/null 2>&1
 # compaction settings tuned so it shows up within a minute; production keeps the defaults
 # (7-day segments, 50% dirty ratio, 1-day tombstone retention)
 ../bin/reset-topic compact.users 1 \

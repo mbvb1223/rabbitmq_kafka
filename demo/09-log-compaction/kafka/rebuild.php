@@ -7,6 +7,7 @@ require __DIR__ . '/../../lib/kafka.php';
 $consumer = new RdKafka\KafkaConsumer(kafka_conf([
     'group.id' => 'compact.rebuild', // never committed: a rebuild always starts from the beginning
     'enable.partition.eof' => 'true',
+    'enable.auto.commit' => 'false',
 ]));
 $consumer->queryWatermarkOffsets('compact.users', 0, $low, $high, 5_000);
 $consumer->assign([new RdKafka\TopicPartition('compact.users', 0, RD_KAFKA_OFFSET_BEGINNING)]);
