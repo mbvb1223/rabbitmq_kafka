@@ -3,4 +3,5 @@
 cd "$(dirname "$0")"
 ../bin/rabbit rabbitmqctl delete_queue replay.events >/dev/null 2>&1
 rm -f rabbitmq/billing.offset
+../bin/kafka kafka-consumer-groups --delete --group replay.billing >/dev/null 2>&1
 ../bin/reset-topic replay.events 1

@@ -6,7 +6,7 @@ require __DIR__ . '/../../lib/kafka.php';
 $since = new DateTimeImmutable($argv[1] ?? '-5 minutes');
 
 $consumer = new RdKafka\KafkaConsumer(kafka_conf([
-    // php-rdkafka requires a group.id, but assign() + no commit never joins or moves the group
+    // RdKafka\KafkaConsumer requires a group.id, but assign() + no commit never joins or moves the group
     'group.id' => 'replay.oneoff',
     'enable.auto.commit' => 'false',
 ]));
