@@ -56,3 +56,13 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
     ports:
       - "8081:8080"
+
+  php:
+    build: demo/lib
+    init: true
+    command: sleep infinity
+    volumes:
+      - ./demo:/demo
+    working_dir: /demo
+    environment:
+      RABBITMQ_HOST: rabbitmq
