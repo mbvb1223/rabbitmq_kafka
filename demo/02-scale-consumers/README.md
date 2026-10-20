@@ -49,6 +49,7 @@ php bench.php 20
 
 - Throughput grows linearly (time ∝ 1/workers). Workers are ready in milliseconds: no rebalance (unlike Kafka), no settle time.
 - I/O-bound jobs scale far past the CPU count (8 here). CPU-bound jobs would stop at the core count.
+- The header says `prefetch 10`: each worker holds at most 10 unacked messages, and the broker sends the next one as soon as it acks. Act 2 shows what happens without that limit.
 
 ### Act 2: the prefetch trap
 
@@ -137,8 +138,8 @@ Share groups (Kafka 4.2+) let many members read one partition and lock records o
 
 ## Checklist
 
-- [ ] RabbitMQ Act 1: 1 → 4 → 20 workers, and throughput grows linearly
-- [ ] RabbitMQ Act 2: reproduced the prefetch trap (1 busy, the rest idle) and fixed it with prefetch 10
-- [ ] Kafka Act 1: 20 workers on 4 partitions → 16 idle, same time as 4; saw `#PARTITIONS 0` in `--describe --members`
-- [ ] Kafka Act 2: added partitions and it scaled; I can give 2 reasons that isn't free
-- [ ] I can explain why Kafka hands out whole partitions (ordering) and what share groups change
+- [x] RabbitMQ Act 1: 1 → 4 → 20 workers, and throughput grows linearly
+- [x] RabbitMQ Act 2: reproduced the prefetch trap (1 busy, the rest idle) and fixed it with prefetch 10
+- [x] Kafka Act 1: 20 workers on 4 partitions → 16 idle, same time as 4; saw `#PARTITIONS 0` in `--describe --members`
+- [x] Kafka Act 2: added partitions and it scaled; I can give 2 reasons that isn't free
+- [x] I can explain why Kafka hands out whole partitions (ordering) and what share groups change
