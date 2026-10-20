@@ -23,24 +23,26 @@ Since Kafka 4.2 (KIP-932, GA Feb 2026) a **share group** lets many consumers rea
 One-time setup is in [../README.md](../README.md). Then, before each run:
 
 ```bash
-./reset.sh   # deletes share.jobs + share.dead, recreates topic share.jobs (1 partition),
-             # deletes groups share.workers + share.classic, sets share.auto.offset.reset=earliest
+# host (repo root)
+demo/08-share-groups/reset.sh   # deletes share.jobs + share.dead, recreates topic share.jobs (1 partition),
+                                # deletes groups share.workers + share.classic, sets share.auto.offset.reset=earliest
 ```
 
 UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081>.
 
 ---
 
-## RabbitMQ (`cd rabbitmq`)
+## RabbitMQ (`rabbitmq/`)
 
 ### Act 1: three workers, one poison job
 
 ```bash
-php consume.php A          # terminals 1-3
-php consume.php B
-php consume.php C
-php dead.php               # terminal 4
-php publish.php 9 3        # terminal 5: 9 jobs, job 3 always fails
+# php container (/demo)
+php 08-share-groups/rabbitmq/consume.php A          # terminals 1-3
+php 08-share-groups/rabbitmq/consume.php B
+php 08-share-groups/rabbitmq/consume.php C
+php 08-share-groups/rabbitmq/dead.php               # terminal 4
+php 08-share-groups/rabbitmq/publish.php 9 3        # terminal 5: 9 jobs, job 3 always fails
 ```
 
 - The good jobs split across two workers while the third keeps getting job 3 (we saw A: 2, 5, 7, 9; B: 1, 4, 6, 8 plus job 3's delivery 5; C: job 3 deliveries 1-4 and 6).
@@ -49,32 +51,37 @@ php publish.php 9 3        # terminal 5: 9 jobs, job 3 always fails
 ### Act 2: a stuck worker, then a crashed one (Ctrl-C the Act 1 workers first)
 
 ```bash
-php consume.php A                    # terminal 1
-php consume.php B & B=$!; sleep 2; kill -STOP $B   # terminal 2: B joins, then freezes
-php publish.php 4                    # terminal 3
-kill -9 $B                           # terminal 2, after a few seconds
+# php container (/demo)
+php 08-share-groups/rabbitmq/consume.php A                    # terminal 1
+php 08-share-groups/rabbitmq/consume.php B & B=$!; sleep 2; kill -STOP $B   # terminal 2: B joins, then freezes
+php 08-share-groups/rabbitmq/publish.php 4                    # terminal 3
+kill -9 $B                                                    # terminal 2, after a few seconds
 ```
 
 - While B is frozen, A processes the other three jobs and the RabbitMQ UI (Queues → `share.jobs`) shows **Unacked 1**: B holds one job (job 1 or 2, whichever round-robin handed it). B never disconnected: php-amqplib turns heartbeats off by default (`heartbeat: 0`), so only `consumer_timeout` would reclaim the job. That is 30 min by default; in 4.3 a quorum queue can lower it with `x-consumer-timeout` or a `consumer-timeout` policy (min 1 min), and the job is returned.
 - `kill -9` closes B's connection and A prints that job with `(delivery 2)` **immediately**. Here redelivery followed the connection. With heartbeats on, a PHP worker blocked in a long job loses its connection after ~2 missed heartbeats, and the job is redelivered while it still runs: the same hazard as Kafka's lock, with longer defaults.
 
-## Kafka (`cd kafka`)
+## Kafka (`kafka/`)
 
 ### Act 1: consumer group vs share group on 1 partition
 
 ```bash
-./run consume.php A        # terminals 1-3: a classic consumer group
-./run consume.php B
-./run consume.php C
-./run publish.php 9        # terminal 4
+# php container (/demo)
+08-share-groups/kafka/run consume.php A        # terminals 1-3: a classic consumer group
+08-share-groups/kafka/run consume.php B
+08-share-groups/kafka/run consume.php C
+08-share-groups/kafka/run publish.php 9        # terminal 4
 ```
 
 - One worker gets all 9; the other two print `partitions: none (idle)`. Ctrl-C all three.
 
 ```bash
-./share-consumer.sh        # terminals 1-3: one share group
-../../bin/kafka kafka-share-groups --describe --group share.workers --members
-./run publish.php 9        # once all 3 members are listed
+# host (repo root)
+demo/08-share-groups/kafka/share-consumer.sh   # terminals 1-3: one share group
+demo/bin/kafka kafka-share-groups --describe --group share.workers --members
+
+# php container (/demo)
+08-share-groups/kafka/run publish.php 9        # once all 3 members are listed
 ```
 
 - `--members` shows **3 members, each assigned `share.jobs:0`**. Same partition, all three.
@@ -83,23 +90,33 @@ kill -9 $B                           # terminal 2, after a few seconds
 ### Act 2: release vs reject (Ctrl-C the three members first)
 
 ```bash
-./share-consumer.sh --release   # terminal 1: "failed, try again"
-./run publish.php 1             # terminal 2
-../../bin/kafka kafka-share-groups --describe --group share.workers --offsets
+# host (repo root)
+demo/08-share-groups/kafka/share-consumer.sh --release   # terminal 1: "failed, try again"
+
+# php container (/demo)
+08-share-groups/kafka/run publish.php 1                  # terminal 2
+
+# host (repo root)
+demo/bin/kafka kafka-share-groups --describe --group share.workers --offsets
 ```
 
 - `Offset:18 Delivery:1 job 1` … `Delivery:5`, then nothing: after `share.delivery.count.limit` (5) the record is **archived**. `--offsets` shows `LAG 0`: the archived poison job counts as done, so lag-based monitoring never sees it.
-- Repeat with `./share-consumer.sh --reject`: one `Offset:19 Delivery:1` line, archived at once.
+- Repeat with `demo/08-share-groups/kafka/share-consumer.sh --reject`: one `Offset:19 Delivery:1` line, archived at once.
 - There is no DLQ to look in. KIP-1191 adds one in Kafka 4.4 (unreleased; by default the DLQ record carries headers, not the payload).
 
 ### Act 3: a stuck worker, the lock (Ctrl-C the --reject member first)
 
 ```bash
-./stuck-worker.sh               # terminal 1: a member in its own container, then docker pause
-./share-consumer.sh             # terminal 2
-./run publish.php 3             # terminal 3
-../../bin/kafka kafka-share-groups --describe --group share.workers --members   # terminal 3, repeat while you wait
-./stuck-worker.sh stop          # afterwards
+# host (repo root)
+demo/08-share-groups/kafka/stuck-worker.sh        # terminal 1: a member in its own container, then docker pause
+demo/08-share-groups/kafka/share-consumer.sh      # terminal 2
+
+# php container (/demo)
+08-share-groups/kafka/run publish.php 3           # terminal 3
+
+# host (repo root)
+demo/bin/kafka kafka-share-groups --describe --group share.workers --members   # repeat while you wait
+demo/08-share-groups/kafka/stuck-worker.sh stop   # afterwards
 ```
 
 - Two jobs print at once. One job (job 1 in our runs) prints **~31 s later** as `Delivery:2`: the frozen member held it until `share.record.lock.duration.ms` (30 s) expired. Head-of-line blocking is reduced, not gone.
@@ -110,10 +127,13 @@ kill -9 $B                           # terminal 2, after a few seconds
 ### Act 4: ack ≠ delete
 
 ```bash
-../../bin/kafka kafka-get-offsets --topic share.jobs --time -2   # -2 = earliest offset still stored: share.jobs:0:0, nothing was deleted
-../../bin/kafka kafka-get-offsets --topic share.jobs --time -1   # -1 = next offset to write: share.jobs:0:23 after Acts 1-3
-../../bin/kafka kafka-console-consumer --topic share.jobs --from-beginning --max-messages 1   # prints "job 1 @ …" from Act 1's consumer-group run
-./run --re rdkafka | grep -ci share   # 0: php-rdkafka exposes no share consumer
+# host (repo root)
+demo/bin/kafka kafka-get-offsets --topic share.jobs --time -2   # -2 = earliest offset still stored: share.jobs:0:0, nothing was deleted
+demo/bin/kafka kafka-get-offsets --topic share.jobs --time -1   # -1 = next offset to write: share.jobs:0:23 after Acts 1-3
+demo/bin/kafka kafka-console-consumer --topic share.jobs --from-beginning --max-messages 1   # prints "job 1 @ …" from Act 1's consumer-group run
+
+# php container (/demo)
+08-share-groups/kafka/run --re rdkafka | grep -ci share   # 0: php-rdkafka exposes no share consumer
 ```
 
 - Every record is accepted or archived, yet the topic still holds them all from offset 0, including the jobs archived in Act 2. Retention deletes, acks never do. A RabbitMQ queue would be at 0.
@@ -136,7 +156,7 @@ kill -9 $B                           # terminal 2, after a few seconds
 
 ## Talking points
 
-- Kafka fixed the partition ceiling, **for Java**. librdkafka's share consumer is Preview since 2.15.0 (our image has 2.14.1: `./run --re rdkafka | grep -ci share` prints 0), and php-rdkafka has no binding (#616).
+- Kafka fixed the partition ceiling, **for Java**. librdkafka's share consumer is Preview since 2.15.0 (our image has 2.14.1: `08-share-groups/kafka/run --re rdkafka | grep -ci share` prints 0), and php-rdkafka has no binding (#616).
 - Share groups are a queue *on top of a log*: per-record state lives beside the log, the data stays until retention.
 - The 30 s lock is the new `max.poll.interval.ms` (the consumer-group limit on time between polls, 5 min; demo 03): fine for 50 ms jobs, dangerous for a PDF render unless the operator raises the broker cap.
 

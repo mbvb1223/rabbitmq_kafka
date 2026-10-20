@@ -14,7 +14,7 @@ A queue treats a message as a **work item**: ack deletes it. A stream treats a m
 
 | | RabbitMQ (`rabbitmq/`) | Kafka (`kafka/`) |
 |---|---|---|
-| Client | php-amqplib 3.7.5, pure PHP, runs on the host | php-rdkafka 6.0.5 + librdkafka 2.14.1, a C extension, runs in a container via `./run` |
+| Client | php-amqplib 3.7.5, pure PHP | php-rdkafka 6.0.5 + librdkafka 2.14.1, a C extension, started via `kafka/run` |
 | Queue | quorum queue: consumers split **per message** | same `group.id`: consumers split **per partition**, so the number of useful workers is capped by the partition count |
 | Stream | stream: every consumer gets everything (over AMQP: no groups, no stored offset) | a different `group.id` per reader: each group gets everything |
 
@@ -23,94 +23,102 @@ A queue treats a message as a **work item**: ack deletes it. A stream treats a m
 One-time setup is in [../README.md](../README.md). Ctrl-C every consumer first (a group with live members can't be deleted). Then, before each run:
 
 ```bash
-./reset.sh      # deletes qs.queue + qs.stream, recreates topic qs.events with 2 partitions
+# host (repo root)
+demo/01-queue-vs-stream/reset.sh      # deletes qs.queue + qs.stream, recreates topic qs.events with 2 partitions
 ```
 
 UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081>.
 
 ---
 
-## RabbitMQ (`cd rabbitmq`)
+## RabbitMQ (`rabbitmq/`)
 
 ### Act 1: queue (consumers compete)
 
 ```bash
-php consume.php queue A        # terminal 1
-php consume.php queue B        # terminal 2
-php publish.php queue 6        # terminal 3
+# php container (/demo)
+php 01-queue-vs-stream/rabbitmq/consume.php queue A        # terminal 1
+php 01-queue-vs-stream/rabbitmq/consume.php queue B        # terminal 2
+php 01-queue-vs-stream/rabbitmq/publish.php queue 6        # terminal 3
 ```
 
 - A and B **split** the 6 events per message, to whoever is free (usually alternating: one gets 1, 3, 5, the other 2, 4, 6). Each event is processed once.
 - The UI shows `qs.queue` at **0** messages: acked events are deleted, and their disk space is reclaimed in the background. Disk tracks the backlog, not a retention window.
-- `php consume.php queue C` started late gets **nothing**. A queue can't replay.
+- `php 01-queue-vs-stream/rabbitmq/consume.php queue C` started late gets **nothing**. A queue can't replay.
 
 ### Act 2: stream (everyone reads everything)
 
 ```bash
-php consume.php stream A       # terminal 1
-php consume.php stream B       # terminal 2
-php publish.php stream 6       # terminal 3
+# php container (/demo)
+php 01-queue-vs-stream/rabbitmq/consume.php stream A       # terminal 1
+php 01-queue-vs-stream/rabbitmq/consume.php stream B       # terminal 2
+php 01-queue-vs-stream/rabbitmq/publish.php stream 6       # terminal 3
 ```
 
 - A **and** B each get all 6 events, at offsets 0-5.
 - After the next refresh (~5-10 s) the UI still shows **6** messages. The ack only gave the consumer **credit**: permission to receive the next message (prefetch is 1). Retention (`x-max-age` / `x-max-length-bytes`, unlimited by default) decides when data is deleted.
-- Late consumers choose where to start:
+- Late consumers choose where to start (php container):
 
 | Command | Reads |
 |---|---|
-| `php consume.php stream C first` | everything (replay) |
-| `php consume.php stream C 3` | from offset 3 |
-| `php consume.php stream C 5m` | the last 5 minutes (in a short run, the same as `first`) |
-| `php consume.php stream C` | only new events (`next` is the default) |
+| `php 01-queue-vs-stream/rabbitmq/consume.php stream C first` | everything (replay) |
+| `php 01-queue-vs-stream/rabbitmq/consume.php stream C 3` | from offset 3 |
+| `php 01-queue-vs-stream/rabbitmq/consume.php stream C 5m` | the last 5 minutes (in a short run, the same as `first`) |
+| `php 01-queue-vs-stream/rabbitmq/consume.php stream C` | only new events (`next` is the default) |
 
-Now Ctrl-C A, wait until the 6 events are over a minute old, run `php publish.php stream 3`, and within 30 s:
+Now Ctrl-C A, wait until the 6 events are over a minute old, run `php 01-queue-vs-stream/rabbitmq/publish.php stream 3`, and within 30 s:
 
-- `php consume.php stream C 30s` gets only the new 3 (offsets 6-8), while `first` still starts at 0. A stream is stored in chunks (batches of messages), so a time offset starts at a chunk boundary and can include a few older events.
-- `php consume.php stream A` gets none of the 3: it starts at `next`, not where it stopped. Over AMQP the broker stores no position for A.
+- `php 01-queue-vs-stream/rabbitmq/consume.php stream C 30s` gets only the new 3 (offsets 6-8), while `first` still starts at 0. A stream is stored in chunks (batches of messages), so a time offset starts at a chunk boundary and can include a few older events.
+- `php 01-queue-vs-stream/rabbitmq/consume.php stream A` gets none of the 3: it starts at `next`, not where it stopped. Over AMQP the broker stores no position for A.
 
 ---
 
-## Kafka (`cd kafka`)
+## Kafka (`kafka/`)
 
-`./run consume.php <group> <name> [first]` joins the group `qs.<group>` (every name in this demo starts with `qs.`). `first` sets `auto.offset.reset=earliest`, the default `next` sets `latest`. Kafka uses it only when the group has **no committed offset**; otherwise the group resumes where it committed.
+`01-queue-vs-stream/kafka/run consume.php <group> <name> [first]` joins the group `qs.<group>` (every name in this demo starts with `qs.`). `first` sets `auto.offset.reset=earliest`, the default `next` sets `latest`. Kafka uses it only when the group has **no committed offset**; otherwise the group resumes where it committed.
 
 Before publishing, wait until the assignment (the broker deciding which member reads which partition) settles, about 7 s: in Act 1, two workers print a partition number and the third stays `none (idle)`. The first worker gets both partitions at once. Later joiners print `partitions: none (idle)` and wait ~5 s for one partition to move over, so publishing earlier sends everything to the first worker. A consumer that gets its partitions after the publish skips those events (it starts at `latest`, the end of the partition).
 
 ### Act 1: same group = "queue" (split per partition)
 
 ```bash
-./run consume.php workers A    # terminal 1
-./run consume.php workers B    # terminal 2
-./run consume.php workers C    # terminal 3
-./run publish.php 6            # terminal 4
+# php container (/demo)
+01-queue-vs-stream/kafka/run consume.php workers A    # terminal 1
+01-queue-vs-stream/kafka/run consume.php workers B    # terminal 2
+01-queue-vs-stream/kafka/run consume.php workers C    # terminal 3
+01-queue-vs-stream/kafka/run publish.php 6            # terminal 4
 ```
 
 - Two workers split the topic: one gets partition 0 (events 1, 3, 5), the other partition 1 (events 2, 4, 6). Which one varies per run.
 - publish.php pins event i to partition (i-1) % 2 so the split is predictable. Real producers pass a key; Kafka hashes it, so every event for one key lands in one partition, in order.
 - The third prints `partitions: none (idle)`. A partition goes to at most one member of a group, so 2 partitions means at most 2 busy workers, in any client. That is the price of per-partition ordering. PHP feels it most because it runs one consumer per process (demo 02).
 - kafka-ui still shows **6** messages. Commit moved the `qs.workers` cursor and deleted nothing.
-- Ctrl-C all three, run `./run publish.php 6`, then restart `./run consume.php workers D first`. D gets **only the new 6**: the group resumes from its committed offset and `first` is ignored. That's how Kafka imitates a queue backlog.
+- Ctrl-C all three, run `01-queue-vs-stream/kafka/run publish.php 6`, then restart `01-queue-vs-stream/kafka/run consume.php workers D first`. D gets **only the new 6**: the group resumes from its committed offset and `first` is ignored. That's how Kafka imitates a queue backlog.
 
 ### Act 2: different groups = stream (everyone reads everything)
 
 ```bash
-./run consume.php analytics A  # terminal 1
-./run consume.php billing B    # terminal 2
-./run publish.php 6            # terminal 3
+# php container (/demo)
+01-queue-vs-stream/kafka/run consume.php analytics A  # terminal 1
+01-queue-vs-stream/kafka/run consume.php billing B    # terminal 2
+01-queue-vs-stream/kafka/run publish.php 6            # terminal 3
 ```
 
 - A **and** B each get all 6 events, but not as 1-6. They arrive one partition at a time (e.g. 2, 4, 6, 1, 3, 5), and the interleaving isn't defined. **Ordering is per partition only**; the RabbitMQ stream gave 1-6 in order.
-- Replay with a new group: `./run consume.php audit C first` reads everything still in the topic (here, everything since the last `./reset.sh`).
-- To rewind an **existing** group by time, Ctrl-C D (a group with live members can't be reset), then
-  `../../bin/kafka kafka-consumer-groups --group qs.workers --topic qs.events --reset-offsets --by-duration PT10M --execute`
-  and restart `./run consume.php workers D`. D re-reads the last 10 minutes even though the group had committed past them. In code, the same is `offsetsForTimes()` + `assign()`. Demo 07 goes deeper.
+- Replay with a new group: `01-queue-vs-stream/kafka/run consume.php audit C first` reads everything still in the topic (here, everything since the last reset).
+- To rewind an **existing** group by time, Ctrl-C D (a group with live members can't be reset), then on the host
+  `demo/bin/kafka kafka-consumer-groups --group qs.workers --topic qs.events --reset-offsets --by-duration PT10M --execute`
+  and restart `01-queue-vs-stream/kafka/run consume.php workers D`. D re-reads the last 10 minutes even though the group had committed past them. In code, the same is `offsetsForTimes()` + `assign()`. Demo 07 goes deeper.
 
 ### Bonus: share group (KIP-932, Kafka's real queue, Java-only)
 
 ```bash
-../../bin/kafka kafka-console-share-consumer --topic qs.events --group qs.share   # terminals 1-3
-../../bin/kafka kafka-share-groups --describe --group qs.share --members          # terminal 4
-./run publish.php 6                                                               # terminal 4, once all 3 members are listed
+# host (repo root)
+demo/bin/kafka kafka-console-share-consumer --topic qs.events --group qs.share   # terminals 1-3
+demo/bin/kafka kafka-share-groups --describe --group qs.share --members          # terminal 4
+
+# php container (/demo)
+01-queue-vs-stream/kafka/run publish.php 6                                       # once all 3 members are listed
 ```
 
 - The `--members` table shows **3 members on 2 partitions, all assigned**. Compare with C idle in Act 1.

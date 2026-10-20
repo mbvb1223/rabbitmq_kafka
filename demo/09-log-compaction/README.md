@@ -21,7 +21,8 @@ A compacted Kafka topic keeps **the latest value per key**, forever. Older versi
 One-time setup is in [../README.md](../README.md). Then, before each run:
 
 ```bash
-./reset.sh      # deletes the compact.users stream, recreates topic compact.users (compacted, 1 partition)
+# host (repo root)
+demo/09-log-compaction/reset.sh      # deletes the compact.users stream, recreates topic compact.users (compacted, 1 partition)
 ```
 
 UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081> (Topics > compact.users > Messages shows the offset gaps).
@@ -35,11 +36,12 @@ UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:
 
 ---
 
-## RabbitMQ (`cd rabbitmq`)
+## RabbitMQ (`rabbitmq/`)
 
 ```bash
-php publish.php      # user-1 v1..v3, user-2 v1..v2, user-3 v1 then "deleted"
-php read.php         # replay from 'first', exits after 2 s idle
+# php container (/demo)
+php 09-log-compaction/rabbitmq/publish.php      # user-1 v1..v3, user-2 v1..v2, user-3 v1 then "deleted"
+php 09-log-compaction/rabbitmq/read.php         # replay from 'first', exits after 2 s idle
 ```
 
 - All 7 records come back, at offsets 0-6: `user-1 name=An v1`, `An v2`, `An v3`, ..., `user-3 (empty)`.
@@ -47,13 +49,14 @@ php read.php         # replay from 'first', exits after 2 s idle
 - A RabbitMQ message has no identity key: the routing key only routes. `publish.php` puts the user id in a `key` header, which the broker never reads, so there is nothing to compact by.
 - Plugins don't close the gap: `rabbitmq_recent_history_exchange` (bundled, disabled) replays the last N messages of a whole exchange, not the latest per key. The community rabbitmq-lvc-exchange kept the last message per routing key and handed it to newly bound queues: no replayable log, no deletes. It needs Mnesia, so it can't run on 4.3, which is Khepri-only. Its last release targets 3.13.
 
-## Kafka (`cd kafka`)
+## Kafka (`kafka/`)
 
 ### Act 1: before compaction, every version is there
 
 ```bash
-./run publish.php    # the same 7 updates, keyed; user-3's last one is a tombstone (null value)
-./run read.php       # assign() from offset 0, stops at the end of the partition
+# php container (/demo)
+09-log-compaction/kafka/run publish.php    # the same 7 updates, keyed; user-3's last one is a tombstone (null value)
+09-log-compaction/kafka/run read.php       # assign() from offset 0, stops at the end of the partition
 ```
 
 ```
@@ -69,9 +72,10 @@ offset  6  user-3  (tombstone)
 The cleaner never touches the **active** segment. A segment rolls when a new record arrives after `segment.ms` (10 s here).
 
 ```bash
-sleep 10 && ./run publish.php tick              # one more record rolls the segment
-while sleep 3; do ./run read.php | tail -1; done   # Ctrl-C once it says "compacted away"
-./run read.php
+# php container (/demo)
+sleep 10 && 09-log-compaction/kafka/run publish.php tick              # one more record rolls the segment
+while sleep 3; do 09-log-compaction/kafka/run read.php | tail -1; done   # Ctrl-C once it says "compacted away"
+09-log-compaction/kafka/run read.php
 ```
 
 - Compaction landed **12-13 s after the tick** in our runs (23 s after the first publish). The cleaner wakes every 15 s (`log.cleaner.backoff.ms`), so expect 0-15 s.
@@ -85,24 +89,26 @@ offset  7  tick    tick @ 05:46:10 UTC
 4 records, next offset 8, 4 offsets compacted away
 ```
 
-- Proof from the broker: `docker compose exec kafka grep 'cleaned log compact.users' /opt/kafka/logs/log-cleaner.log | tail -1` prints `Log cleaner thread 0 cleaned log compact.users-0 (dirty section = [0, 7])`.
+- Proof from the broker, on the host: `docker compose exec kafka grep 'cleaned log compact.users' /opt/kafka/logs/log-cleaner.log | tail -1` prints `Log cleaner thread 0 cleaned log compact.users-0 (dirty section = [0, 7])`.
 
 ### Act 3: the tombstone goes away, on the next pass
 
 The tombstone survives the first pass on purpose: consumers that are behind must still see "user-3 was deleted". It is dropped on a **later** pass, at least `delete.retention.ms` (10 s here) after the first one. A later pass needs new dirty data. After a pass nothing is dirty, so the cleaner does not come back until a new record closes another segment. Tick again:
 
 ```bash
-sleep 10 && ./run publish.php tick   # tick 1's segment must be >= segment.ms old to roll
-while sleep 3; do ./run read.php | tail -1; done   # wait for "5 offsets compacted away"
+# php container (/demo)
+sleep 10 && 09-log-compaction/kafka/run publish.php tick   # tick 1's segment must be >= segment.ms old to roll
+while sleep 3; do 09-log-compaction/kafka/run read.php | tail -1; done   # wait for "5 offsets compacted away"
 ```
 
 - We waited 60 s without a tick and the tombstone stayed. After the tick it was gone within 4-19 s. Offset 6 is now a gap too.
-- Still "4 offsets compacted away" after 30 s? The tick landed in the active segment. Run `./run publish.php tick` again; the count then ends at 6, not 5.
+- Still "4 offsets compacted away" after 30 s? The tick landed in the active segment. Run `09-log-compaction/kafka/run publish.php tick` again; the count then ends at 6, not 5.
 
 ### Act 4: rebuild state on boot
 
 ```bash
-./run rebuild.php
+# php container (/demo)
+09-log-compaction/kafka/run rebuild.php
 ```
 
 ```
@@ -117,7 +123,8 @@ rebuilt from 4 records in 502 ms:
 - The topic size tracks the number of **keys** plus the not-yet-compacted head (bounded by `min.cleanable.dirty.ratio` and the active segment), not the number of updates.
 
 ```bash
-../../bin/kafka kafka-configs --describe --topic __consumer_offsets | grep cleanup.policy   # cleanup.policy=compact
+# host (repo root)
+demo/bin/kafka kafka-configs --describe --topic __consumer_offsets | grep cleanup.policy   # cleanup.policy=compact
 ```
 
 Kafka stores each group's latest committed offset in a compacted topic.

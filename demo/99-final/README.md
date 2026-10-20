@@ -66,9 +66,9 @@ Also learned (not in the proposal):
 
 ## 5. Before going on stage
 
-- [ ] `docker compose pull` and `docker build -t demo-kafka-php lib` at home, not on venue Wi-Fi
+- [ ] `docker compose pull` and `docker build -t demo-kafka-php demo/lib` at home, not on venue Wi-Fi
 - [ ] Port 5672 free (or `RABBITMQ_PORT=5673` everywhere)
-- [ ] `./reset.sh` in each live demo; check no leftover Kafka CLI consumer: `docker compose exec kafka ps aux | grep -c Console`
+- [ ] `demo/NN-name/reset.sh` in each live demo; check no leftover Kafka CLI consumer: `docker compose exec kafka ps aux | grep -c Console`
 - [ ] Terminals pre-opened per act, font size up, RabbitMQ UI and kafka-ui logged in
 - [ ] Pre-record every live demo as a fallback
 - [ ] Optional, untested: `KAFKA_GROUP_CONSUMER_HEARTBEAT_INTERVAL_MS=1000` + `KAFKA_GROUP_CONSUMER_MIN_HEARTBEAT_INTERVAL_MS=1000` in `compose.yaml` to shorten the KIP-848 settle wait. Re-measure 02 if you try it.

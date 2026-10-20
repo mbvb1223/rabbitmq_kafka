@@ -23,7 +23,8 @@ Dead-lettering: after the limit, the broker republishes the job to a dead-letter
 One-time setup is in [../README.md](../README.md). Then, before each run:
 
 ```bash
-./reset.sh      # deletes the retry.* queues, recreates topics retry.jobs, retry.jobs.retry, retry.jobs.dlq (1 partition each)
+# host (repo root)
+demo/03-retry-dlq/reset.sh      # deletes the retry.* queues, recreates topics retry.jobs, retry.jobs.retry, retry.jobs.dlq (1 partition each)
 ```
 
 UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081>.
@@ -32,7 +33,7 @@ UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:
 
 ---
 
-## RabbitMQ (`cd rabbitmq`)
+## RabbitMQ (`rabbitmq/`)
 
 `bootstrap.php` declares `retry.jobs` as a quorum queue with these arguments:
 
@@ -48,9 +49,10 @@ Each redelivery carries `x-delivery-count` (failed attempts: `reject` only) and 
 ### Act 1: retry with backoff, then dead-letter
 
 ```bash
-php worker.php reject          # terminal 1
-php publish.php 5 3            # terminal 2, then wait ~20 s
-php dead.php                   # drains retry.dead; then Ctrl-C the worker
+# php container (/demo)
+php 03-retry-dlq/rabbitmq/worker.php reject          # terminal 1
+php 03-retry-dlq/rabbitmq/publish.php 5 3            # terminal 2, then wait ~20 s
+php 03-retry-dlq/rabbitmq/dead.php                   # drains retry.dead; then Ctrl-C the worker
 ```
 
 ```
@@ -73,8 +75,9 @@ php dead.php                   # drains retry.dead; then Ctrl-C the worker
 ### Act 2: the nack trap
 
 ```bash
-php worker.php nack            # terminal 1
-php publish.php 5 3            # terminal 2; after ~10 s the UI shows retry.jobs Total 3 (2 ready + 1 unacked), then Ctrl-C the worker and ../reset.sh
+# php container (/demo)
+php 03-retry-dlq/rabbitmq/worker.php nack            # terminal 1
+php 03-retry-dlq/rabbitmq/publish.php 5 3            # terminal 2; after ~10 s the UI shows retry.jobs Total 3 (2 ready + 1 unacked), then Ctrl-C the worker and run demo/03-retry-dlq/reset.sh on the host
 ```
 
 ```
@@ -91,10 +94,11 @@ php publish.php 5 3            # terminal 2; after ~10 s the UI shows retry.jobs
 ### Act 3: dead-letter by reason (app-level)
 
 ```bash
-php worker.php route                          # terminal 1
-php publish.php 5 3:timeout,4:validation      # terminal 2, then wait ~20 s
-php dead.php retry.dlq.validation
-php dead.php retry.dlq.timeout                # then Ctrl-C the worker
+# php container (/demo)
+php 03-retry-dlq/rabbitmq/worker.php route                          # terminal 1
+php 03-retry-dlq/rabbitmq/publish.php 5 3:timeout,4:validation      # terminal 2, then wait ~20 s
+php 03-retry-dlq/rabbitmq/dead.php retry.dlq.validation
+php 03-retry-dlq/rabbitmq/dead.php retry.dlq.timeout                # then Ctrl-C the worker
 ```
 
 ```
@@ -115,15 +119,16 @@ php dead.php retry.dlq.timeout                # then Ctrl-C the worker
 
 ---
 
-## Kafka (`cd kafka`)
+## Kafka (`kafka/`)
 
 Wait until both consumers print `waiting on` before publishing.
 
 ```bash
-./run worker.php               # terminal 1: group retry.workers on retry.jobs
-./run retrier.php              # terminal 2: group retry.retrier on retry.jobs.retry
-./run publish.php 5 3          # terminal 3, then wait ~12 s
-./run dlq.php                  # reads retry.jobs.dlq from the start; then Ctrl-C the worker and the retrier
+# php container (/demo)
+03-retry-dlq/kafka/run worker.php               # terminal 1: group retry.workers on retry.jobs
+03-retry-dlq/kafka/run retrier.php              # terminal 2: group retry.retrier on retry.jobs.retry
+03-retry-dlq/kafka/run publish.php 5 3          # terminal 3, then wait ~12 s
+03-retry-dlq/kafka/run dlq.php                  # reads retry.jobs.dlq from the start; then Ctrl-C the worker and the retrier
 ```
 
 ```
@@ -175,7 +180,7 @@ Kafka share groups count deliveries (default limit 5) but **archive** the record
 - `x-delivery-limit=3` allows 4 deliveries. The dead job carries `x-delivery-count: 4`.
 - Delayed retry is quorum-queue only, linear, and set per queue. A per-message delay needs AMQP 1.0 (`x-opt-delivery-time`), which PHP can't use.
 - A headers exchange with `x-match: all` **ignores headers starting with `x-`**. The binding is left with no criteria and matches everything: both DLQs got both jobs. Use `all-with-x`/`any-with-x`, or drop the `x-` prefix.
-- Re-binding with different arguments adds a second binding instead of replacing the first. `./reset.sh` deletes the queues to clear them.
+- Re-binding with different arguments adds a second binding instead of replacing the first. `reset.sh` deletes the queues to clear them.
 - `kafka-console-consumer --timeout-ms` exits with an ERROR and a stack trace, so `kafka/dlq.php` reads the DLQ instead.
 - Kafka header values are strings: cast numbers with `(string)`.
 

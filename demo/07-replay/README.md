@@ -23,7 +23,8 @@ Scenario: *we shipped a bug in the billing consumer at 10:00. Fix it, then repro
 One-time setup is in [../README.md](../README.md). Then, before each run:
 
 ```bash
-./reset.sh      # deletes stream replay.events + billing.offset + group replay.billing, recreates topic replay.events with 1 partition
+# host (repo root)
+demo/07-replay/reset.sh      # deletes stream replay.events + billing.offset + group replay.billing, recreates topic replay.events with 1 partition
 ```
 
 All output is UTC (PHP and the containers). On stage, prefer relative times: `-2 minutes`, `30s`, `PT10M`.
@@ -32,18 +33,19 @@ Every consumer keeps running until you Ctrl-C it. Stop it before the next comman
 
 ---
 
-## RabbitMQ (`cd rabbitmq`)
+## RabbitMQ (`rabbitmq/`)
 
 ### Act 1: resume after a restart (your offset, your file)
 
 ```bash
-php publish.php 5
-php resume.php           # Ctrl-C as soon as event 5 appears (each event takes 1.5 s)
-php publish.php 3        # these arrive while billing is down
-php resume.php           # resumes from the saved offset + 1
-php publish.php 3        # billing is down again, and pretend billing.offset is lost
-php consume.php next     # only the attaching line: those 3 are never delivered
-php consume.php first    # all 11 again, including the 8 billing already processed
+# php container (/demo)
+php 07-replay/rabbitmq/publish.php 5
+php 07-replay/rabbitmq/resume.php           # Ctrl-C as soon as event 5 appears (each event takes 1.5 s)
+php 07-replay/rabbitmq/publish.php 3        # these arrive while billing is down
+php 07-replay/rabbitmq/resume.php           # resumes from the saved offset + 1
+php 07-replay/rabbitmq/publish.php 3        # billing is down again, and pretend billing.offset is lost
+php 07-replay/rabbitmq/consume.php next     # only the attaching line: those 3 are never delivered
+php 07-replay/rabbitmq/consume.php first    # all 11 again, including the 8 billing already processed
 ```
 
 Each publish run numbers its events from 1, so use the offset and the `@ HH:MM:SS` to spot a replay.
@@ -56,12 +58,13 @@ Each publish run numbers its events from 1, so use the offset and the `@ HH:MM:S
 ### Act 2: replay by time
 
 ```bash
-php publish.php 3                # fresh events, so the next two windows aren't empty
-php consume.php 30s              # interval string: the last 30 seconds
-php consume.php '@-2 minutes'    # '@...' becomes a DateTimeImmutable
-php consume.php '@-1 day'        # everything still retained
-php consume.php 3                # from offset 3
-php consume.php 1791610000       # the trap: leave it running, then in terminal 2: php publish.php 1
+# php container (/demo)
+php 07-replay/rabbitmq/publish.php 3                # fresh events, so the next two windows aren't empty
+php 07-replay/rabbitmq/consume.php 30s              # interval string: the last 30 seconds
+php 07-replay/rabbitmq/consume.php '@-2 minutes'    # '@...' becomes a DateTimeImmutable
+php 07-replay/rabbitmq/consume.php '@-1 day'        # everything still retained
+php 07-replay/rabbitmq/consume.php 3                # from offset 3
+php 07-replay/rabbitmq/consume.php 1791610000       # the trap: leave it running, then in terminal 2: php 07-replay/rabbitmq/publish.php 1
 ```
 
 - `30s` / `@-2 minutes`: the events published in that window, at least the 3 you just sent. `@-1 day`: all 14 (offsets 0-13). `3`: offsets 3-13.
@@ -71,34 +74,38 @@ php consume.php 1791610000       # the trap: leave it running, then in terminal 
 
 ---
 
-## Kafka (`cd kafka`)
+## Kafka (`kafka/`)
 
 ### Act 1: resume after a restart (the broker remembers)
 
 ```bash
-./run publish.php 5
-./run consume.php        # group replay.billing; Ctrl-C once offset 4 is printed
-./run publish.php 3
-./run consume.php        # resumes, no local file; leave it running for Act 2
+# php container (/demo)
+07-replay/kafka/run publish.php 5
+07-replay/kafka/run consume.php        # group replay.billing; Ctrl-C once offset 4 is printed
+07-replay/kafka/run publish.php 3
+07-replay/kafka/run consume.php        # resumes, no local file; leave it running for Act 2
 ```
 
 - First run: `committed offset on the broker: none`, so `auto.offset.reset=earliest` applies: offsets 0-4.
-- Second run: `committed offset on the broker: 5`, then only offsets 5, 6, 7. The state lives in the broker. No duplicate here, but not because of the broker: `consume.php` traps Ctrl-C, commits the in-flight message, then `close()`s, while `resume.php` dies mid-job. Kill the Kafka consumer hard instead (`docker kill` the `demo-kafka-php` container from `docker ps`) and, once its 45 s session times out, the uncommitted offset comes back too. Both sides are at-least-once: commit after the work.
+- Second run: `committed offset on the broker: 5`, then only offsets 5, 6, 7. The state lives in the broker. No duplicate here, but not because of the broker: `consume.php` traps Ctrl-C, commits the in-flight message, then `close()`s, while `resume.php` dies mid-job. Kill the Kafka consumer hard instead (from a second php container shell: `pkill -9 -f 'php consume.php'`, which kills every `consume.php` in the container) and, once its 45 s session times out, the uncommitted offset comes back too. Both sides are at-least-once: commit after the work.
 - Kafka commits the **next** offset to read (5). Our RabbitMQ file stores the **last processed** one (4). Pick one convention, or you'll skip or replay one message.
 
 ### Act 2: rewind an existing group (`kafka-consumer-groups`)
 
 ```bash
-K=../../bin/kafka
+# host (repo root)
+K=demo/bin/kafka
 # while consume.php is still running:
 $K kafka-consumer-groups --group replay.billing --topic replay.events --reset-offsets --to-earliest --execute
 # after Ctrl-C:
 $K kafka-consumer-groups --describe --group replay.billing
 $K kafka-consumer-groups --group replay.billing --topic replay.events --reset-offsets --by-duration PT10M --dry-run
 $K kafka-consumer-groups --group replay.billing --topic replay.events --reset-offsets --shift-by -2 --dry-run
-# the time your 2nd `./run publish.php 3` printed ("... at HH:MM:SS UTC"); .000 is required
+# the time your 2nd `07-replay/kafka/run publish.php 3` printed ("... at HH:MM:SS UTC"); .000 is required
 $K kafka-consumer-groups --group replay.billing --topic replay.events --reset-offsets --to-datetime "$(date -u +%F)T<HH:MM:SS>.000Z" --execute
-./run consume.php
+
+# php container (/demo)
+07-replay/kafka/run consume.php
 ```
 
 - While a member is connected: `Error: Assignments can only be reset if the group 'replay.billing' is inactive, but the current state is Stable.` An external reset (CLI or Admin API) needs an empty group, so stop every consumer first. A consumer can still move itself from code: `seek()` in Java, `assign()` with explicit offsets in php-rdkafka (Act 3).
@@ -111,8 +118,9 @@ $K kafka-consumer-groups --group replay.billing --topic replay.events --reset-of
 ### Act 3: one-off reprocessing from PHP (no group, no CLI)
 
 ```bash
-./run reprocess.php '<HH:MM:SS> UTC'   # the time your 2nd ./run publish.php printed ("... at HH:MM:SS UTC")
-./run reprocess.php '-1 day'           # everything still retained
+# php container (/demo)
+07-replay/kafka/run reprocess.php '<HH:MM:SS> UTC'   # the time your 2nd 07-replay/kafka/run publish.php printed ("... at HH:MM:SS UTC")
+07-replay/kafka/run reprocess.php '-1 day'           # everything still retained
 ```
 
 - `offsetsForTimes()` returns the first offset per partition whose timestamp is ≥ the given time: `partition 0: since <HH:MM:SS> = offset 5, end = 8`, then offsets 5-7 and `done, no group offsets touched`. `-1 day` gives offset 0 and all 8.

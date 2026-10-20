@@ -1,6 +1,6 @@
 # 3-node clusters for demo 10. Run one profile at a time, the main stack keeps running:
-#   docker compose -f compose.yaml --profile kafka up -d
-#   docker compose -f compose.yaml --profile rabbitmq up -d
+#   docker compose -f demo/10-durability/compose.yaml --profile kafka up -d       (from the repo root)
+#   docker compose -f demo/10-durability/compose.yaml --profile rabbitmq up -d    (from the repo root)
 name: rabbitmq-kafka-durable
 
 x-broker: &broker

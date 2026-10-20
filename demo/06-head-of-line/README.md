@@ -19,22 +19,24 @@ Every job is `{"id":3,"at":<publish time>}` ([job.php](job.php)). Job 3 sleeps 8
 
 ## Setup
 
-One-time setup is in [../README.md](../README.md). Then, before each act except Kafka Act 3 (it continues from Act 2), stop all workers and run from `rabbitmq/` or `kafka/`:
+One-time setup is in [../README.md](../README.md). Then, before each act except Kafka Act 3 (it continues from Act 2), stop all workers and run:
 
 ```bash
-../reset.sh      # deletes queues hol.jobs + hol.ordered, recreates topics hol.jobs (2 partitions) and hol.dlq
+# host (repo root)
+demo/06-head-of-line/reset.sh      # deletes queues hol.jobs + hol.ordered, recreates topics hol.jobs (2 partitions) and hol.dlq
 ```
 
 ---
 
-## RabbitMQ (`cd rabbitmq`)
+## RabbitMQ (`rabbitmq/`)
 
 ### Act 1: competing consumers route around the slow job
 
 ```bash
-php consume.php jobs A         # terminal 1 (prefetch 1)
-php consume.php jobs B         # terminal 2
-php publish.php jobs 10        # terminal 3
+# php container (/demo)
+php 06-head-of-line/rabbitmq/consume.php jobs A         # terminal 1 (prefetch 1)
+php 06-head-of-line/rabbitmq/consume.php jobs B         # terminal 2
+php 06-head-of-line/rabbitmq/publish.php jobs 10        # terminal 3
 ```
 
 - One worker gets job 1, then job 3 (`done 8.2 s after publish`). The other takes **everything else**: 2, 4, 5, ..., 10, the last one `done 1.6 s after publish`. Which of A and B gets job 1 depends on who registered first.
@@ -42,7 +44,7 @@ php publish.php jobs 10        # terminal 3
 
 ### Act 2: prefetch is a head-of-line buffer too
 
-Ctrl-C A and B, run `../reset.sh`, then start both workers with prefetch 10: `php consume.php jobs A 10` and `php consume.php jobs B 10`. Publish as in Act 1.
+Ctrl-C A and B, run `demo/06-head-of-line/reset.sh` on the host, then start both workers with prefetch 10: `php 06-head-of-line/rabbitmq/consume.php jobs A 10` and `php 06-head-of-line/rabbitmq/consume.php jobs B 10`. Publish as in Act 1.
 
 - The broker pushes jobs round-robin up front: one worker holds 1, 3, 5, 7, 9 and the other 2, 4, 6, 8, 10.
 - The even worker is done after 1.0 s and sits idle. 5, 7, 9 are stuck in the odd worker's buffer behind job 3 (`8.4 s`, `8.6 s`, `8.8 s`). **Exactly Kafka's partition 0 below.**
@@ -53,28 +55,34 @@ Ctrl-C A and B, run `../reset.sh`, then start both workers with prefetch 10: `ph
 `x-single-active-consumer`: the queue delivers to one consumer at a time; the others wait as hot standbys and take over when it disconnects.
 
 ```bash
-php consume.php ordered A      # terminal 1
-php consume.php ordered B      # terminal 2: standby
-../../bin/rabbit rabbitmqctl list_consumers queue_name consumer_tag active activity_status | grep hol.ordered
-php publish.php ordered 10     # terminal 3
+# php container (/demo)
+php 06-head-of-line/rabbitmq/consume.php ordered A      # terminal 1
+php 06-head-of-line/rabbitmq/consume.php ordered B      # terminal 2: standby
+
+# host (repo root)
+demo/bin/rabbit rabbitmqctl list_consumers queue_name consumer_tag active activity_status | grep hol.ordered
+
+# php container (/demo)
+php 06-head-of-line/rabbitmq/publish.php ordered 10     # terminal 3
 ```
 
 - `list_consumers` shows `A true single_active` and `B false waiting`.
 - A does 1 to 10 in order. Job 3 is done at 8.4 s, and 4 to 10 follow at 8.6 to 9.9 s. B does nothing.
-- Leave A and B running and re-publish (`php publish.php ordered 10`). As soon as A prints `job 2`, Ctrl-C A: you have ~8 s while it's on job 3. B then prints `job 3 ... (redelivered)` and 4 to 10 right after it, in order.
+- Leave A and B running and re-publish (`php 06-head-of-line/rabbitmq/publish.php ordered 10`). As soon as A prints `job 2`, Ctrl-C A: you have ~8 s while it's on job 3. B then prints `job 3 ... (redelivered)` and 4 to 10 right after it, in order.
 
 ---
 
-## Kafka (`cd kafka`)
+## Kafka (`kafka/`)
 
 Wait until **each** worker prints its own partition before publishing (KIP-848 assignment took 7-12 s). The first worker briefly prints `partitions: 0, 1` and the second `partitions: none (idle)`; publish only after they settle on `partitions: 0` and `partitions: 1`.
 
 ### Act 1: a slow job blocks its partition
 
 ```bash
-./run consume.php A            # terminal 1
-./run consume.php B            # terminal 2
-./run publish.php 10           # terminal 3: odd jobs -> partition 0, even -> partition 1
+# php container (/demo)
+06-head-of-line/kafka/run consume.php A            # terminal 1
+06-head-of-line/kafka/run consume.php B            # terminal 2
+06-head-of-line/kafka/run publish.php 10           # terminal 3: odd jobs -> partition 0, even -> partition 1
 ```
 
 - The worker on partition 0 prints 1 (`0.7 s`), then 3 (`8.7 s`), then **5, 7, 9 at 8.9 to 9.3 s**: they waited behind job 3.
@@ -85,10 +93,16 @@ Wait until **each** worker prints its own partition before publishing (KIP-848 a
 ### Act 2: a poison job blocks its partition forever
 
 ```bash
+# host (repo root)
 # Ctrl-C the Act 1 workers first
-../reset.sh && ./run publish.php 10
-for i in 1 2 3; do ./run consume.php A poison; done   # a supervisor restarting a crashing worker, bounded to 3
-../../bin/kafka kafka-consumer-groups --describe --group hol.workers
+demo/06-head-of-line/reset.sh
+
+# php container (/demo)
+06-head-of-line/kafka/run publish.php 10
+for i in 1 2 3; do 06-head-of-line/kafka/run consume.php A poison; done   # a supervisor restarting a crashing worker, bounded to 3
+
+# host (repo root)
+demo/bin/kafka kafka-consumer-groups --describe --group hol.workers
 ```
 
 - Run 1 finishes partition 1 and job 1, then `CRASH on job 3 is poison at partition 0, offset 1. Exit without commit`.
@@ -98,9 +112,12 @@ for i in 1 2 3; do ./run consume.php A poison; done   # a supervisor restarting 
 ### Act 3: the fix is code you write (no reset: continues from Act 2)
 
 ```bash
-./run consume.php A dlq        # Ctrl-C once job 9 is done
-../../bin/kafka kafka-console-consumer --topic hol.dlq --from-beginning --formatter-property print.key=true --max-messages 1
-../../bin/kafka kafka-consumer-groups --describe --group hol.workers
+# php container (/demo)
+06-head-of-line/kafka/run consume.php A dlq        # Ctrl-C once job 9 is done
+
+# host (repo root)
+demo/bin/kafka kafka-console-consumer --topic hol.dlq --from-beginning --formatter-property print.key=true --max-messages 1
+demo/bin/kafka kafka-consumer-groups --describe --group hol.workers
 ```
 
 - `job 3 is poison: parked in hol.dlq, committing past offset 1`, then 5, 7 and 9 are done. LAG is 0 on both partitions.

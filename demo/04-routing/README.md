@@ -23,35 +23,38 @@ Publisher -> **exchange** (a router, stores nothing) -> **bindings** (queue + pa
 One-time setup is in [../README.md](../README.md). Then, before each run:
 
 ```bash
-./reset.sh      # deletes routing.* queues and groups, recreates routing.orders + 6 slice topics (1 partition each)
+# host (repo root)
+demo/04-routing/reset.sh      # deletes routing.* queues and groups, recreates routing.orders + 6 slice topics (1 partition each)
 ```
 
 UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081>.
 
 ---
 
-## RabbitMQ (`cd rabbitmq`)
+## RabbitMQ (`rabbitmq/`)
 
 ### Act 1: each team binds its own slice
 
 ```bash
-php consume.php vn-team 'orders.*.vn'      # terminal 1
-php consume.php finance 'orders.paid.*'    # terminal 2
-php consume.php audit 'orders.#'           # terminal 3
-php publish.php                            # terminal 4: the 8 orders
+# php container (/demo)
+php 04-routing/rabbitmq/consume.php vn-team 'orders.*.vn'      # terminal 1
+php 04-routing/rabbitmq/consume.php finance 'orders.paid.*'    # terminal 2
+php 04-routing/rabbitmq/consume.php audit 'orders.#'           # terminal 3
+php 04-routing/rabbitmq/publish.php                            # terminal 4: the 8 orders
 ```
 
 - `vn-team` gets orders 1, 3, 6, 7, 8. `finance` gets 3, 4, 7. `audit` gets all 8.
 - Order 3 (`orders.paid.vn`) lands in **three** queues (vn-team, finance, audit): the publisher sent it once and the broker copied it. 8 publishes, 16 deliveries.
-- The UI's `routing.orders` exchange page (or `../../bin/rabbit rabbitmqctl list_bindings source_name destination_name routing_key`) shows the three bindings. They're broker state: Ctrl-C `audit`, publish again, and `routing.audit` holds 8 messages until it comes back. Start it again (`php consume.php audit 'orders.#'`): it prints the 8 it missed.
+- The UI's `routing.orders` exchange page (or, on the host, `demo/bin/rabbit rabbitmqctl list_bindings source_name destination_name routing_key`) shows the three bindings. They're broker state: Ctrl-C `audit`, publish again, and `routing.audit` holds 8 messages until it comes back. Start it again (`php 04-routing/rabbitmq/consume.php audit 'orders.#'`): it prints the 8 it missed.
 
 ### Act 2: a new team appears, another changes its mind
 
 ```bash
-php consume.php refunds 'orders.refunded.#'   # terminal 5
-php publish.php
-php unbind.php finance 'orders.paid.*'
-php publish.php
+# php container (/demo)
+php 04-routing/rabbitmq/consume.php refunds 'orders.refunded.#'   # terminal 5
+php 04-routing/rabbitmq/publish.php
+php 04-routing/rabbitmq/unbind.php finance 'orders.paid.*'
+php 04-routing/rabbitmq/publish.php
 ```
 
 - `refunds` gets only 5 and 8 from **this** publish. A new queue sees messages published after it's bound; there's no history.
@@ -61,8 +64,9 @@ php publish.php
 ### Act 3: the broker tells you when nothing matches
 
 ```bash
-php publish.php orders.cancelled.th    # an event type nobody planned for
-php publish.php order.cancelled.th     # a typo
+# php container (/demo)
+php 04-routing/rabbitmq/publish.php orders.cancelled.th    # an event type nobody planned for
+php 04-routing/rabbitmq/publish.php order.cancelled.th     # a typo
 ```
 
 - `orders.cancelled.th` goes to `audit` thanks to `#`: a new event type reaches the catch-all with no change anywhere.
@@ -70,29 +74,35 @@ php publish.php order.cancelled.th     # a typo
 
 ---
 
-## Kafka (`cd kafka`)
+## Kafka (`kafka/`)
 
 ### Act 1: one topic, filter in PHP
 
 ```bash
-./run filter.php vn-team 'orders.*.vn'     # terminal 1
-./run filter.php finance 'orders.paid.*'   # terminal 2
-./run publish.php                          # terminal 3: 8 orders -> routing.orders, event + country in headers
+# php container (/demo)
+04-routing/kafka/run filter.php vn-team 'orders.*.vn'     # terminal 1
+04-routing/kafka/run filter.php finance 'orders.paid.*'   # terminal 2
+04-routing/kafka/run publish.php                          # terminal 3: 8 orders -> routing.orders, event + country in headers
 ```
 
 - Each team is its own group (`routing.filter.<team>`), so each reads all 8: `vn-team` prints `read 8, kept 5`, `finance` prints `read 8, kept 3`, with a `skip` line for every order fetched for nothing. At 8 orders that's free. At 50 K msg/s and 20 teams, the broker serves 20x the traffic so each team can throw most of it away.
-- Start `./run filter.php refunds 'orders.refunded.#'` **after** the publish: `read 8, kept 2`. A new group with `auto.offset.reset=earliest` reads the history because every slice shares one topic. A RabbitMQ queue or stream bound now would start empty.
+- Start `04-routing/kafka/run filter.php refunds 'orders.refunded.#'` **after** the publish: `read 8, kept 2`. A new group with `auto.offset.reset=earliest` reads the history because every slice shares one topic. A RabbitMQ queue or stream bound now would start empty.
 
 ### Act 2: topic per slice + regex subscription
 
 A subscription starting with `^` is a regex. With `group.protocol=consumer` (KIP-848) the broker resolves it, not the client.
 
 ```bash
-./run regex.php vn-team '^routing\.orders\..*\.vn$'   # terminal 1
-./run publish.php split                               # terminal 2: order 1 -> routing.orders.created.vn, ...
-../../bin/kafka kafka-topics --create --topic routing.orders.cancelled.vn --partitions 1 --replication-factor 1   # prints a WARNING about '.' and '_': harmless, see Gotchas
-./run publish.php orders.cancelled.vn
-./run publish.php order.cancelled.th                  # a typo
+# php container (/demo)
+04-routing/kafka/run regex.php vn-team '^routing\.orders\..*\.vn$'   # terminal 1
+04-routing/kafka/run publish.php split                               # terminal 2: order 1 -> routing.orders.created.vn, ...
+
+# host (repo root)
+demo/bin/kafka kafka-topics --create --topic routing.orders.cancelled.vn --partitions 1 --replication-factor 1   # prints a WARNING about '.' and '_': harmless, see Gotchas
+
+# php container (/demo)
+04-routing/kafka/run publish.php orders.cancelled.vn
+04-routing/kafka/run publish.php order.cancelled.th                  # a typo
 ```
 
 ```
