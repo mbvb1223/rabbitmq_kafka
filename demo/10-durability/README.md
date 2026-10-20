@@ -29,18 +29,51 @@ One-time setup (composer install) is in [../README.md](../README.md). This demo 
 
 ```bash
 # host (repo root)
-docker compose -f demo/10-durability/compose.yaml --profile kafka up -d      # ~20 s
-demo/10-durability/reset.sh kafka                                            # durable.acks1 (min.insync 1), durable.acksall (min.insync 2), RF 3
+
+# start this demo's compose file (-f), Kafka services only (--profile kafka): 1 controller + 3 brokers,
+# in the background (-d). Takes ~20 s
+docker compose -f demo/10-durability/compose.yaml --profile kafka up -d
+
+# create topics durable.acks1 (min.insync 1) and durable.acksall (min.insync 2), 1 partition, RF 3
+demo/10-durability/reset.sh kafka
+
 # ... Kafka acts ...
+
+# after the Kafka acts: stop and remove the Kafka containers; -v also deletes their volumes (the stored data)
 docker compose -f demo/10-durability/compose.yaml --profile kafka down -v
-docker compose -f demo/10-durability/compose.yaml --profile rabbitmq up -d   # ~30 s; UI on http://localhost:15681 (app / app)
-demo/10-durability/reset.sh rabbitmq                                         # durable.orders, leader on rabbit-1
+
+# start the RabbitMQ services (rabbit-1..3) in the background. Takes ~30 s; UI on http://localhost:15681 (app / app)
+docker compose -f demo/10-durability/compose.yaml --profile rabbitmq up -d
+
+# create the quorum queue durable.orders with its leader on rabbit-1
+demo/10-durability/reset.sh rabbitmq
 ```
 
-- **Helpers:** `demo/10-durability/kafka-cli <tool>` and `demo/10-durability/rabbit-cli <tool>` run the CLI tools inside this cluster.
 - **Ports:** 5681 = rabbit-1 (UI 15681), 5682 = rabbit-2, 5683 = rabbit-3.
-- **`demo/10-durability/kill-leader <topic|queue> [stall-s]`:** `docker kill`s the leader, i.e. SIGKILL with no clean shutdown. With `stall-s`, it first `docker pause`s both followers for that long, like a GC pause or a network blip: they fall behind but are still ISR members / Raft voters. Keep `stall-s` under 9 s (`broker.session.timeout.ms`), or Kafka fences the paused followers and the kill leaves the partition offline instead.
-- **Producers:** they log every acknowledged id, and `verify.php` reads everything back and prints `LOST` = acknowledged but missing. RabbitMQ's `verify.php` drains the queue (it acks what it reads): run it once per act; a second run reports everything LOST.
+
+### The scripts
+
+| Script | What it does | Arguments |
+|---|---|---|
+| `reset.sh <profile>` | Starts any stopped node of that profile and deletes the old acked/confirmed logs. `kafka`: deletes and recreates `durable.acks1` (`min.insync.replicas` 1) and `durable.acksall` (2), 1 partition, RF 3. `rabbitmq`: deletes `durable.classic`, waits for all 3 nodes, then recreates the quorum queue `durable.orders` from rabbit-1 (`rabbitmq/bootstrap.php`), so rabbit-1 leads it | `kafka` or `rabbitmq` |
+| `kafka/run <script> [args]` | Runs `kafka/<script>` with PHP in a throwaway container on this cluster's Docker network, connected to kafka-1..3 (php-rdkafka is a C extension, so it doesn't run on the host) | the script name, then its arguments |
+| `kafka/produce.php <topic> <acks> [seconds] [rate]` | Prints the partition's leader, then produces ids 1, 2, 3, … at a steady rate with a status line per second, and logs every acked id to `kafka/acked-<topic>.log`. A message not acked within 30 s (`message.timeout.ms`) fails. At the end it waits up to 35 s for outstanding acks, then exits | `<topic>`: `durable.acks1` or `durable.acksall`. `<acks>`: `1` or `all` (`all` also turns on the idempotent producer). `[seconds]`: how long, default 30. `[rate]`: messages per second, default 10000 |
+| `kafka/verify.php <topic>` | Reads the topic from the start, compares it with `kafka/acked-<topic>.log` and prints the result, then exits. Gives up with `no data for 10 s` if nothing arrives for 10 s (e.g. the partition has no leader) | topic, default `durable.acks1` |
+| `rabbitmq/publish.php [seconds] [rate]` | Publishes persistent ids 1, 2, 3, … to `durable.orders` with publisher confirms, prints a status line per second, and logs every confirmed id to `rabbitmq/confirmed-durable.orders.log`. Stops early with `connection lost` if its node dies; otherwise waits up to 10 s for the last confirms, then exits | `[seconds]`: default 30. `[rate]`: messages per second, default 2000. Env `RABBITMQ_PORT`: which node to connect to (see Ports) |
+| `rabbitmq/verify.php` | Drains `durable.orders` (consumes and acks every message until none arrives for 3 s), compares it with `rabbitmq/confirmed-durable.orders.log` and prints the result. Run it once per act: a second run finds the queue empty and reports everything LOST | none. `RABBITMQ_PORT` picks the node |
+| `rabbitmq/classic.php <mode>` | `declare`: deletes and recreates the classic queue `durable.classic` on the node you connect to. `publish`: publishes 5 persistent messages with confirms, waits up to 5 s, prints confirmed/nacked, then asks the queue how many messages it holds | `declare` or `publish` (default). `RABBITMQ_PORT` picks the node |
+| `kill-leader <topic or queue> [stall-s]` | Finds the node leading the Kafka partition or quorum queue and `docker kill`s it, i.e. SIGKILL with no clean shutdown. With `stall-s`, it first `docker pause`s both followers for that long, like a GC pause or a network blip: they fall behind but are still ISR members / Raft voters. It unpauses them right after the kill | `durable.orders` = the RabbitMQ queue, any other name = a Kafka topic. `stall-s`: seconds to freeze the followers. Keep it under 9 s (`broker.session.timeout.ms`), or Kafka fences the paused followers and the kill leaves the partition offline instead |
+| `kafka-cli <tool> [args]` | Runs the Kafka CLI tool `<tool>` in the controller container (the one node this demo never kills) against kafka-1..3, and drops the stack traces the tools print for every stopped broker | tool name (`kafka-topics`, `kafka-configs`, `kafka-console-producer`), then its flags. `--bootstrap-server` is added for you |
+| `rabbit-cli <tool> [args]` | Runs a RabbitMQ CLI tool (`rabbitmqctl`, `rabbitmq-queues`, …) on the first node that is up. `reset.sh` and `kill-leader` use it | tool name, then its arguments |
+
+Reading a status line, e.g. `[ 7s] sent 14034, confirmed 13067, nacked 0, waiting 967`:
+
+- `[ 7s]`: seconds since the producer started.
+- `sent`: messages handed to the client library so far.
+- `acked` (Kafka) / `confirmed` (RabbitMQ): the broker said "got it". Only these ids go to the log that `verify.php` checks.
+- `failed` (Kafka): the delivery report came back with an error, shown as `last error: ...` (e.g. `Local: Message timed out`). `nacked` (RabbitMQ): the broker refused the message.
+- `waiting` (RabbitMQ): sent but not yet confirmed or nacked. The `done:` line calls it `never confirmed`.
+- `verify.php` prints `acked` / `confirmed` (ids in the log), `present` / `in queue` (distinct ids read back), `duplicates` (ids read more than once) and `LOST` (acknowledged but missing).
 
 ---
 
@@ -50,10 +83,18 @@ demo/10-durability/reset.sh rabbitmq                                         # d
 
 ```bash
 # host (repo root)
-demo/10-durability/kafka/run produce.php durable.acks1 1 25 20000         # terminal 1: 25 s at 20k msg/s
-demo/10-durability/kill-leader durable.acks1                              # terminal 2, after ~5 s
-docker compose -f demo/10-durability/compose.yaml --profile kafka start   # after the producer is done
-demo/10-durability/kafka/run verify.php durable.acks1                     # LOST 0
+
+# terminal 1: produce to durable.acks1 with acks=1 ("1") for 25 s ("25") at 20,000 msg/s ("20000")
+demo/10-durability/kafka/run produce.php durable.acks1 1 25 20000
+
+# terminal 2, ~5 s after starting the producer: SIGKILL the leader of durable.acks1 (no stall-s: followers stay current)
+demo/10-durability/kill-leader durable.acks1
+
+# terminal 2, once the producer prints "done": bring the killed broker back (start = restart this profile's stopped containers)
+docker compose -f demo/10-durability/compose.yaml --profile kafka start
+
+# terminal 2: read durable.acks1 back and count acked ids that are missing. Expect LOST 0
+demo/10-durability/kafka/run verify.php durable.acks1
 ```
 
 - **LOST 0 in 5 of 5 runs.** On one laptop a follower is less than 1 ms behind, so the kill never lands in the gap. Acks pause for ~10 s: the controller waits `broker.session.timeout.ms` (9 s) before it gives the partition a new leader.
@@ -61,11 +102,21 @@ demo/10-durability/kafka/run verify.php durable.acks1                     # LOST
 
 ```bash
 # host (repo root)
-demo/10-durability/reset.sh kafka                                         # ids restart at 1: old records would hide the loss
-demo/10-durability/kafka/run produce.php durable.acks1 1 25 20000         # terminal 1
-demo/10-durability/kill-leader durable.acks1 3                            # terminal 2, after ~5 s
-docker compose -f demo/10-durability/compose.yaml --profile kafka start   # after the producer is done
-demo/10-durability/kafka/run verify.php durable.acks1                     # LOST ≈ 60,000
+
+# terminal 1: recreate both topics and delete the acked logs, so ids restart at 1 (old records would hide the loss)
+demo/10-durability/reset.sh kafka
+
+# terminal 1: same producer: acks=1, 25 s at 20,000 msg/s
+demo/10-durability/kafka/run produce.php durable.acks1 1 25 20000
+
+# terminal 2, ~5 s in: "3" = freeze (docker pause) both followers for 3 s, then SIGKILL the leader and unfreeze them
+demo/10-durability/kill-leader durable.acks1 3
+
+# terminal 2, once the producer prints "done": bring the killed broker back
+docker compose -f demo/10-durability/compose.yaml --profile kafka start
+
+# terminal 2: count acked ids that are missing. Expect LOST ≈ 60,000
+demo/10-durability/kafka/run verify.php durable.acks1
 ```
 
 ```
@@ -83,10 +134,18 @@ acked 380750, present 319646 (0 duplicates), LOST 61104              # verify
 
 ```bash
 # host (repo root)
-demo/10-durability/kafka/run produce.php durable.acksall all 25 20000     # terminal 1
-demo/10-durability/kill-leader durable.acksall 3                          # terminal 2, after ~5 s
-docker compose -f demo/10-durability/compose.yaml --profile kafka start   # after the producer is done
-demo/10-durability/kafka/run verify.php durable.acksall                   # LOST 0
+
+# terminal 1: produce to durable.acksall (min.insync 2) with acks=all ("all", idempotent), 25 s at 20,000 msg/s
+demo/10-durability/kafka/run produce.php durable.acksall all 25 20000
+
+# terminal 2, ~5 s in: same chaos: freeze both followers for 3 s, then SIGKILL the leader
+demo/10-durability/kill-leader durable.acksall 3
+
+# terminal 2, once the producer prints "done": bring the killed broker back
+docker compose -f demo/10-durability/compose.yaml --profile kafka start
+
+# terminal 2: count acked ids that are missing. Expect LOST 0
+demo/10-durability/kafka/run verify.php durable.acksall
 ```
 
 ```
@@ -106,11 +165,24 @@ acked 345853, present 345853 (0 duplicates), LOST 0
 
 ```bash
 # host (repo root)
+
+# terminal 1: start any stopped broker and recreate both topics empty
 demo/10-durability/reset.sh kafka
-demo/10-durability/kafka/run produce.php durable.acksall all 50 2000           # terminal 1
-demo/10-durability/kafka-cli kafka-topics --describe --topic durable.acksall   # terminal 2: note the Leader
-docker compose -f demo/10-durability/compose.yaml stop kafka-X kafka-Y         # ~5 s in: the two that aren't the Leader
-demo/10-durability/kafka-cli kafka-topics --describe --topic durable.acksall   # Isr: <leader>  Elr: <the follower removed last>
+
+# terminal 1: acks=all to durable.acksall (min.insync 2) for 50 s at 2,000 msg/s
+demo/10-durability/kafka/run produce.php durable.acksall all 50 2000
+
+# terminal 2: show the partition's Leader, Replicas and Isr. Note the Leader's number
+demo/10-durability/kafka-cli kafka-topics --describe --topic durable.acksall
+
+# terminal 2, ~5 s into the producer: stop the two brokers that aren't the Leader (replace X and Y with their numbers)
+docker compose -f demo/10-durability/compose.yaml stop kafka-X kafka-Y
+
+# terminal 2: describe again. Expect Isr: <leader>  Elr: <the follower removed last>
+demo/10-durability/kafka-cli kafka-topics --describe --topic durable.acksall
+
+# terminal 2: send one record "order-1" with the Java console producer. Each --command-property is a producer setting:
+# acks=all, give up after 8 s (delivery.timeout.ms), retry a request after 3 s (request.timeout.ms)
 echo order-1 | demo/10-durability/kafka-cli kafka-console-producer --topic durable.acksall \
   --command-property acks=all --command-property delivery.timeout.ms=8000 --command-property request.timeout.ms=3000
 ```
@@ -124,8 +196,12 @@ Still in terminal 2, with the two brokers stopped:
 
 ```bash
 # host (repo root)
-demo/10-durability/kafka/run produce.php durable.acks1 all 15 2000   # min.insync 1: every message acked, failed 0
-demo/10-durability/kafka/run verify.php durable.acks1                # LOST 0, but one broker holds it all
+
+# terminal 2: acks=all to durable.acks1 (min.insync 1) for 15 s at 2,000 msg/s. Expect every message acked, failed 0
+demo/10-durability/kafka/run produce.php durable.acks1 all 15 2000
+
+# terminal 2: read it back. Expect LOST 0, but one broker holds it all
+demo/10-durability/kafka/run verify.php durable.acks1
 ```
 
 - `acks=all` + the default `min.insync.replicas=1` = one copy (talk point 3). Don't try `acks=1` on `durable.acksall`: it's acked, but consumers see nothing until the ISR is back, so verify reports it all LOST.
@@ -134,11 +210,17 @@ Before moving on, look at the broker defaults that matter for [page cache vs fsy
 
 ```bash
 # host (repo root)
-docker compose -f demo/10-durability/compose.yaml --profile kafka start     # Act 3 left two brokers stopped
+
+# terminal 2: start the two brokers Act 3 left stopped
+docker compose -f demo/10-durability/compose.yaml --profile kafka start
+
+# terminal 2: print broker 1's settings, defaults included (--all), filtered to the two shown under the command
 demo/10-durability/kafka-cli kafka-configs --describe --all --entity-type brokers --entity-name 1 | grep -E ' (log.flush.interval.messages|min.insync.replicas)='
 #  log.flush.interval.messages=9223372036854775807   never fsync per message, the OS decides
 #  min.insync.replicas=1                              acks=all can mean one broker
-docker compose -f demo/10-durability/compose.yaml --profile kafka down -v   # before the RabbitMQ part
+
+# terminal 2, before the RabbitMQ part: stop and remove the Kafka containers and their volumes
+docker compose -f demo/10-durability/compose.yaml --profile kafka down -v
 ```
 
 ---
@@ -149,9 +231,17 @@ docker compose -f demo/10-durability/compose.yaml --profile kafka down -v   # be
 
 ```bash
 # host (repo root)
-RABBITMQ_PORT=5681 php demo/10-durability/rabbitmq/publish.php 20 2000   # terminal 1: publisher on rabbit-1, the leader
-demo/10-durability/kill-leader durable.orders 3                          # terminal 2, after ~5 s
+
+# terminal 1: publish to durable.orders for 20 s at 2,000 msg/s with confirms. RABBITMQ_PORT=5681 = connect to rabbit-1, the leader
+RABBITMQ_PORT=5681 php demo/10-durability/rabbitmq/publish.php 20 2000
+
+# terminal 2, ~5 s in: freeze both followers for 3 s, then SIGKILL the leader rabbit-1 (the publisher's connection dies with it)
+demo/10-durability/kill-leader durable.orders 3
+
+# terminal 2, once the publisher prints "done": bring rabbit-1 back
 docker compose -f demo/10-durability/compose.yaml start rabbit-1
+
+# terminal 2: drain durable.orders via rabbit-2 (RABBITMQ_PORT=5682) and count confirmed ids that are missing. Expect LOST 0
 RABBITMQ_PORT=5682 php demo/10-durability/rabbitmq/verify.php
 ```
 
@@ -170,10 +260,18 @@ confirmed 13067, in queue 13400 (0 duplicates), LOST 0
 
 ```bash
 # host (repo root)
+
+# terminal 1: start any stopped node, recreate durable.orders (leader on rabbit-1) and delete the confirmed log
 demo/10-durability/reset.sh rabbitmq
+
+# terminal 1: publish for 25 s at 2,000 msg/s via rabbit-3 (RABBITMQ_PORT=5683), so the connection survives the kill
 RABBITMQ_PORT=5683 php demo/10-durability/rabbitmq/publish.php 25 2000
-docker compose -f demo/10-durability/compose.yaml kill rabbit-1   # after ~8 s; start it again ~10 s later
-RABBITMQ_PORT=5682 php demo/10-durability/rabbitmq/verify.php     # confirmed 50000, in queue 50000, LOST 0
+
+# terminal 2, ~8 s in: SIGKILL the leader rabbit-1. ~10 s later start it again (the `start rabbit-1` command from Act 1)
+docker compose -f demo/10-durability/compose.yaml kill rabbit-1
+
+# terminal 2, once the publisher prints "done": drain via rabbit-2 and check. Expect confirmed 50000, in queue 50000, LOST 0
+RABBITMQ_PORT=5682 php demo/10-durability/rabbitmq/verify.php
 ```
 
 - Publisher on rabbit-3 so its connection survives the kill. In Act 1 it died with the leader: php-amqplib doesn't reconnect, while librdkafka fails over by itself.
@@ -183,10 +281,18 @@ RABBITMQ_PORT=5682 php demo/10-durability/rabbitmq/verify.php     # confirmed 50
 
 ```bash
 # host (repo root)
+
+# terminal 1: start any stopped node and recreate durable.orders empty
 demo/10-durability/reset.sh rabbitmq
+
+# terminal 1: publish for 30 s at 1,000 msg/s via rabbit-3 (RABBITMQ_PORT=5683)
 RABBITMQ_PORT=5683 php demo/10-durability/rabbitmq/publish.php 30 1000
-docker compose -f demo/10-durability/compose.yaml kill rabbit-1 rabbit-2   # after ~5 s; start them ~13 s later
-RABBITMQ_PORT=5682 php demo/10-durability/rabbitmq/verify.php              # confirmed 30000, in queue 30000, LOST 0
+
+# terminal 2, ~5 s in: SIGKILL rabbit-1 and rabbit-2, leaving no majority. ~13 s later start both again (`start rabbit-1 rabbit-2`)
+docker compose -f demo/10-durability/compose.yaml kill rabbit-1 rabbit-2
+
+# terminal 2, once the publisher prints "done": drain via rabbit-2 and check. Expect confirmed 30000, in queue 30000, LOST 0
+RABBITMQ_PORT=5682 php demo/10-durability/rabbitmq/verify.php
 ```
 
 - Confirms freeze at 5,003 while `waiting` climbs to 15,016. **Nothing fails**: AMQP has no publish timeout, so your `wait_for_pending_acks` timeout is the only clock. When the majority returns, all 30,000 are confirmed.
@@ -195,18 +301,31 @@ RABBITMQ_PORT=5682 php demo/10-durability/rabbitmq/verify.php              # con
 
 ```bash
 # host (repo root)
+
+# terminal 1: "declare" = recreate the classic queue durable.classic via rabbit-1 (RABBITMQ_PORT=5681), so it lives only there
 RABBITMQ_PORT=5681 php demo/10-durability/rabbitmq/classic.php declare
+
+# terminal 1: SIGKILL rabbit-1, the only node holding durable.classic
 docker compose -f demo/10-durability/compose.yaml kill rabbit-1
-RABBITMQ_PORT=5683 php demo/10-durability/rabbitmq/classic.php publish   # confirmed 0, nacked 5 at once; NOT_FOUND ... due to timeout after ~70 s
+
+# terminal 1: "publish" = 5 persistent messages with confirms via rabbit-3, then ask the queue's size.
+# Expect confirmed 0, nacked 5 at once, then NOT_FOUND ... due to timeout after ~70 s
+RABBITMQ_PORT=5683 php demo/10-durability/rabbitmq/classic.php publish
+
+# terminal 1: start rabbit-1 again and give it 12 s to boot
 docker compose -f demo/10-durability/compose.yaml start rabbit-1; sleep 12
-RABBITMQ_PORT=5683 php demo/10-durability/rabbitmq/classic.php publish   # confirmed 5, nacked 0; holds 5
+
+# terminal 1: publish again. Expect confirmed 5, nacked 0; the queue holds 5
+RABBITMQ_PORT=5683 php demo/10-durability/rabbitmq/classic.php publish
 ```
 
 - Classic is what you get without `x-queue-type: quorum`. It lives on one node: with that node down, publishes are nacked and even a passive declare times out. The nacked messages were never stored.
 
 ```bash
 # host (repo root)
-docker compose -f demo/10-durability/compose.yaml --profile rabbitmq down -v   # when you're done
+
+# when you're done: stop and remove the RabbitMQ containers and their volumes
+docker compose -f demo/10-durability/compose.yaml --profile rabbitmq down -v
 ```
 
 ---

@@ -26,6 +26,25 @@ One-time setup is in [../README.md](../README.md). Then, before each act except 
 demo/06-head-of-line/reset.sh      # deletes queues hol.jobs + hol.ordered, recreates topics hol.jobs (2 partitions) and hol.dlq
 ```
 
+### The scripts
+
+| Script | What it does | Arguments |
+|---|---|---|
+| `rabbitmq/consume.php <queue> <name> [prefetch]` | Consumes a queue until Ctrl-C: runs each job, then acks it | `<queue>`: `jobs` = `hol.jobs` (Acts 1-2), `ordered` = `hol.ordered`, the single-active-consumer queue (Act 3). `<name>`: the worker's label and consumer tag, e.g. `A`. `[prefetch]`: how many unacked jobs the broker pushes to it at once, default 1 |
+| `rabbitmq/publish.php <queue> <count>` | Publishes job 1 … job `<count>` to that queue, then exits | `<queue>`: `jobs` or `ordered`, as above. `<count>`: how many jobs, default 10 |
+| `kafka/consume.php <name> [mode]` | Consumes `hol.jobs` in group `hol.workers` until Ctrl-C: runs each job, then commits its offset | `<name>`: the worker's label, e.g. `A`. `[mode]`: `slow` (default, Act 1): job 3 sleeps 8 s. `poison` (Act 2): job 3 throws and the worker exits without committing. `dlq` (Act 3): job 3 throws, the worker copies it to `hol.dlq` and commits past it |
+| `kafka/publish.php <count>` | Publishes job 1 … job `<count>` to `hol.jobs` with key `job-<n>`, odd jobs to partition 0 and even to partition 1, then exits | `<count>`: how many jobs, default 10 |
+
+Jobs do no real work: `work()` in [job.php](job.php) just sleeps, and job 3 is hard-coded as the bad one, so every run blocks on the same job.
+
+Reading a worker line, e.g. `[A] job  3  done  8.7 s after publish  (partition 0, offset 1)`:
+
+- `[A]`: the worker's `<name>`.
+- `done 8.7 s after publish`: from publish to the end of the job, waiting time included. A 200 ms job that shows ~8 s waited behind job 3.
+- `(partition 0, offset 1)` (Kafka): where the job sits in `hol.jobs`.
+- `(redelivered)` (RabbitMQ): the broker handed this job out before and it was never acked (Act 3).
+- `partitions: 0` (Kafka): the partitions this worker owns now, printed whenever that changes; `none (idle)` = none.
+
 ---
 
 ## RabbitMQ (`rabbitmq/`)
@@ -34,9 +53,15 @@ demo/06-head-of-line/reset.sh      # deletes queues hol.jobs + hol.ordered, recr
 
 ```bash
 # php container (/demo)
-php 06-head-of-line/rabbitmq/consume.php jobs A         # terminal 1 (prefetch 1)
-php 06-head-of-line/rabbitmq/consume.php jobs B         # terminal 2
-php 06-head-of-line/rabbitmq/publish.php jobs 10        # terminal 3
+
+# terminal 1: worker "A" on hol.jobs ("jobs"); no prefetch argument = prefetch 1, so it holds one job at a time
+php 06-head-of-line/rabbitmq/consume.php jobs A
+
+# terminal 2: worker "B" on the same queue, competing with A
+php 06-head-of-line/rabbitmq/consume.php jobs B
+
+# terminal 3: publish job 1..10 ("10") to hol.jobs; job 3 is the 8 s one. Watch which worker finishes what
+php 06-head-of-line/rabbitmq/publish.php jobs 10
 ```
 
 - One worker gets job 1, then job 3 (`done 8.2 s after publish`). The other takes **everything else**: 2, 4, 5, ..., 10, the last one `done 1.6 s after publish`. Which of A and B gets job 1 depends on who registered first.
@@ -56,14 +81,22 @@ Ctrl-C A and B, run `demo/06-head-of-line/reset.sh` on the host, then start both
 
 ```bash
 # php container (/demo)
-php 06-head-of-line/rabbitmq/consume.php ordered A      # terminal 1
-php 06-head-of-line/rabbitmq/consume.php ordered B      # terminal 2: standby
+
+# terminal 1: worker "A" on hol.ordered ("ordered"), the single-active-consumer queue; it attaches first, so it becomes the active one
+php 06-head-of-line/rabbitmq/consume.php ordered A
+
+# terminal 2: worker "B" on the same queue; it attaches second, so it waits as the standby
+php 06-head-of-line/rabbitmq/consume.php ordered B
 
 # host (repo root)
+
+# show each consumer's queue, tag (A or B), whether it's active, and its status; grep keeps only hol.ordered
 demo/bin/rabbit rabbitmqctl list_consumers queue_name consumer_tag active activity_status | grep hol.ordered
 
 # php container (/demo)
-php 06-head-of-line/rabbitmq/publish.php ordered 10     # terminal 3
+
+# terminal 3: publish job 1..10 ("10") to hol.ordered; job 3 takes 8 s and every job behind it waits
+php 06-head-of-line/rabbitmq/publish.php ordered 10
 ```
 
 - `list_consumers` shows `A true single_active` and `B false waiting`.
@@ -80,9 +113,15 @@ Wait until **each** worker prints its own partition before publishing (KIP-848 a
 
 ```bash
 # php container (/demo)
-06-head-of-line/kafka/run consume.php A            # terminal 1
-06-head-of-line/kafka/run consume.php B            # terminal 2
-06-head-of-line/kafka/run publish.php 10           # terminal 3: odd jobs -> partition 0, even -> partition 1
+
+# terminal 1: worker "A" in group hol.workers on topic hol.jobs; no mode = "slow": job 3 sleeps 8 s
+06-head-of-line/kafka/run consume.php A
+
+# terminal 2: worker "B" in the same group; the 2 partitions get split between A and B
+06-head-of-line/kafka/run consume.php B
+
+# terminal 3: once A and B print partitions: 0 and partitions: 1, publish job 1..10 ("10"): odd jobs -> partition 0, even -> partition 1
+06-head-of-line/kafka/run publish.php 10
 ```
 
 - The worker on partition 0 prints 1 (`0.7 s`), then 3 (`8.7 s`), then **5, 7, 9 at 8.9 to 9.3 s**: they waited behind job 3.
@@ -94,14 +133,22 @@ Wait until **each** worker prints its own partition before publishing (KIP-848 a
 
 ```bash
 # host (repo root)
-# Ctrl-C the Act 1 workers first
+
+# Ctrl-C the Act 1 workers first, then recreate the topics (this also drops group hol.workers' committed offsets)
 demo/06-head-of-line/reset.sh
 
 # php container (/demo)
+
+# terminal 1: publish job 1..10 ("10") again: odd jobs -> partition 0, even -> partition 1
 06-head-of-line/kafka/run publish.php 10
-for i in 1 2 3; do 06-head-of-line/kafka/run consume.php A poison; done   # a supervisor restarting a crashing worker, bounded to 3
+
+# terminal 1: run worker "A" in "poison" mode (job 3 throws, the worker exits without committing) 3 times in a row:
+# a supervisor restarting a crashing worker, bounded to 3
+for i in 1 2 3; do 06-head-of-line/kafka/run consume.php A poison; done
 
 # host (repo root)
+
+# show group hol.workers per partition: committed offset, end of the log, and LAG (messages not done yet)
 demo/bin/kafka kafka-consumer-groups --describe --group hol.workers
 ```
 
@@ -113,10 +160,17 @@ demo/bin/kafka kafka-consumer-groups --describe --group hol.workers
 
 ```bash
 # php container (/demo)
-06-head-of-line/kafka/run consume.php A dlq        # Ctrl-C once job 9 is done
+
+# terminal 1: worker "A" in "dlq" mode: job 3 still throws, but the worker copies it to topic hol.dlq and commits past it.
+# Ctrl-C once job 9 is done
+06-head-of-line/kafka/run consume.php A dlq
 
 # host (repo root)
+
+# print hol.dlq from the start, with each message's key (print.key=true), and exit after 1 message
 demo/bin/kafka kafka-console-consumer --topic hol.dlq --from-beginning --formatter-property print.key=true --max-messages 1
+
+# show the group's committed offset and LAG per partition again
 demo/bin/kafka kafka-consumer-groups --describe --group hol.workers
 ```
 

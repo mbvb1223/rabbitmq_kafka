@@ -29,6 +29,30 @@ demo/04-routing/reset.sh      # deletes routing.* queues and groups, recreates r
 
 UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081>.
 
+### The scripts
+
+| Script | What it does | Arguments |
+|---|---|---|
+| `rabbitmq/consume.php <team> <pattern>` | Declares the team's queue `routing.<team>`, binds it to the topic exchange `routing.orders` with the pattern, then prints every order it gets until Ctrl-C | `<team>`: names the queue `routing.<team>`. `<pattern>`: the binding pattern (you may pass several), `*` = one word, `#` = zero or more |
+| `rabbitmq/publish.php [routing-key]` | Publishes to the exchange `routing.orders` with `mandatory` and publisher confirms, then exits | none: the 8 orders. A routing key: one order, `order 9`, with that key |
+| `rabbitmq/unbind.php <team> <pattern>` | Removes that one binding from `routing.<team>`, then exits. The queue and its running consumer stay | same as `consume.php` |
+| `kafka/filter.php <team> <pattern>` | Group `routing.filter.<team>` reads all of topic `routing.orders` (from the start for a new group), rebuilds `orders.<event>.<country>` from the headers and keeps or skips each order in PHP, until Ctrl-C | `<team>`: names the group. `<pattern>`: like a binding, but matched in PHP, and `#` needs at least one word |
+| `kafka/publish.php [mode]` | Produces orders with message key `order-N`, then exits | none: the 8 orders to `routing.orders`, event + country in headers. `split`: each order to its slice topic `routing.orders.<event>.<country>`. A routing key: one order, `order 9`, to topic `routing.<key>` |
+| `kafka/regex.php <team> <regex>` | Group `routing.regex.<team>` subscribes to every topic whose name matches; prints its topics whenever they change, and each order, until Ctrl-C | `<regex>`: starts with `^`, matched by the broker against the whole topic name |
+| `demo/bin/kafka <tool> [args]` (host) | Runs a Kafka CLI tool in the kafka container, `--bootstrap-server` already set | `<tool>`: e.g. `kafka-topics`; the rest is passed to it |
+| `demo/bin/rabbit <tool> [args]` (host) | Runs a RabbitMQ CLI tool in the rabbitmq container | `<tool>`: e.g. `rabbitmqctl`; the rest is passed to it |
+
+Every run publishes the same 8 orders from [orders.php](orders.php) with the same keys, so every run routes the same way. A one-key publish is always `order 9`.
+
+Reading a consumer line, e.g. `[vn-team] order 3  orders.paid.vn`:
+
+- `[vn-team]`: the team whose consumer printed it.
+- `order 3`: the message body; 3 is the order's number in `orders.php`.
+- `orders.paid.vn`: its routing key. `filter.php` lines add `kept` or `skip` and show the key it rebuilt from the headers; `regex.php` prints the topic instead.
+- `read 8, kept 5` (`filter.php`): totals so far, printed when no new order arrives for 1 s.
+- `+5s topics: ...` (`regex.php`): seconds since it subscribed, and the topics assigned to it now; printed each time that list changes.
+- `confirmed:` / `returned: ... (312 NO_ROUTE)` (RabbitMQ `publish.php`): the broker's publisher confirm, and a `mandatory` publish handed back because no queue matched. `failed: ...` (Kafka `publish.php`): a produce that wasn't delivered.
+
 ---
 
 ## RabbitMQ (`rabbitmq/`)
@@ -37,10 +61,18 @@ UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:
 
 ```bash
 # php container (/demo)
-php 04-routing/rabbitmq/consume.php vn-team 'orders.*.vn'      # terminal 1
-php 04-routing/rabbitmq/consume.php finance 'orders.paid.*'    # terminal 2
-php 04-routing/rabbitmq/consume.php audit 'orders.#'           # terminal 3
-php 04-routing/rabbitmq/publish.php                            # terminal 4: the 8 orders
+
+# terminal 1: team "vn-team" binds its queue routing.vn-team with 'orders.*.vn' (any event, country vn) and prints what arrives
+php 04-routing/rabbitmq/consume.php vn-team 'orders.*.vn'
+
+# terminal 2: team "finance" binds routing.finance with 'orders.paid.*' (paid, any country)
+php 04-routing/rabbitmq/consume.php finance 'orders.paid.*'
+
+# terminal 3: team "audit" binds routing.audit with 'orders.#' (every order)
+php 04-routing/rabbitmq/consume.php audit 'orders.#'
+
+# terminal 4: no argument = publish the 8 orders once each to the exchange routing.orders. Then read terminals 1-3
+php 04-routing/rabbitmq/publish.php
 ```
 
 - `vn-team` gets orders 1, 3, 6, 7, 8. `finance` gets 3, 4, 7. `audit` gets all 8.
@@ -51,9 +83,17 @@ php 04-routing/rabbitmq/publish.php                            # terminal 4: the
 
 ```bash
 # php container (/demo)
-php 04-routing/rabbitmq/consume.php refunds 'orders.refunded.#'   # terminal 5
+
+# terminal 5: a new team "refunds" binds routing.refunds with 'orders.refunded.#' (refunds, any country)
+php 04-routing/rabbitmq/consume.php refunds 'orders.refunded.#'
+
+# terminal 4: publish the 8 orders again. Check what terminal 5 got
 php 04-routing/rabbitmq/publish.php
+
+# terminal 4: remove the binding 'orders.paid.*' from finance's queue routing.finance; leave finance running
 php 04-routing/rabbitmq/unbind.php finance 'orders.paid.*'
+
+# terminal 4: publish the 8 again. Check terminal 2 (finance)
 php 04-routing/rabbitmq/publish.php
 ```
 
@@ -65,8 +105,12 @@ php 04-routing/rabbitmq/publish.php
 
 ```bash
 # php container (/demo)
-php 04-routing/rabbitmq/publish.php orders.cancelled.th    # an event type nobody planned for
-php 04-routing/rabbitmq/publish.php order.cancelled.th     # a typo
+
+# terminal 4: one argument = publish one order (order 9) with that routing key: an event type nobody planned for
+php 04-routing/rabbitmq/publish.php orders.cancelled.th
+
+# terminal 4: the same with a typo ("order." instead of "orders."). Watch for a "returned:" line
+php 04-routing/rabbitmq/publish.php order.cancelled.th
 ```
 
 - `orders.cancelled.th` goes to `audit` thanks to `#`: a new event type reaches the catch-all with no change anywhere.
@@ -80,9 +124,15 @@ php 04-routing/rabbitmq/publish.php order.cancelled.th     # a typo
 
 ```bash
 # php container (/demo)
-04-routing/kafka/run filter.php vn-team 'orders.*.vn'     # terminal 1
-04-routing/kafka/run filter.php finance 'orders.paid.*'   # terminal 2
-04-routing/kafka/run publish.php                          # terminal 3: 8 orders -> routing.orders, event + country in headers
+
+# terminal 1: team "vn-team" (group routing.filter.vn-team) reads all of routing.orders and keeps, in PHP, what matches 'orders.*.vn'
+04-routing/kafka/run filter.php vn-team 'orders.*.vn'
+
+# terminal 2: team "finance" (group routing.filter.finance) reads the same topic and keeps 'orders.paid.*'
+04-routing/kafka/run filter.php finance 'orders.paid.*'
+
+# terminal 3: no argument = the 8 orders to the one topic routing.orders, event + country in headers. Then read terminals 1-2
+04-routing/kafka/run publish.php
 ```
 
 - Each team is its own group (`routing.filter.<team>`), so each reads all 8: `vn-team` prints `read 8, kept 5`, `finance` prints `read 8, kept 3`, with a `skip` line for every order fetched for nothing. At 8 orders that's free. At 50 K msg/s and 20 teams, the broker serves 20x the traffic so each team can throw most of it away.
@@ -94,15 +144,27 @@ A subscription starting with `^` is a regex. With `group.protocol=consumer` (KIP
 
 ```bash
 # php container (/demo)
-04-routing/kafka/run regex.php vn-team '^routing\.orders\..*\.vn$'   # terminal 1
-04-routing/kafka/run publish.php split                               # terminal 2: order 1 -> routing.orders.created.vn, ...
+
+# terminal 1: team "vn-team" (group routing.regex.vn-team) subscribes to every topic routing.orders.<event>.vn.
+# Wait until its "topics:" line lists the 3 .vn topics (~5 s)
+04-routing/kafka/run regex.php vn-team '^routing\.orders\..*\.vn$'
+
+# terminal 2: "split" = each order to the topic of its slice: order 1 -> routing.orders.created.vn, ...
+04-routing/kafka/run publish.php split
 
 # host (repo root)
-demo/bin/kafka kafka-topics --create --topic routing.orders.cancelled.vn --partitions 1 --replication-factor 1   # prints a WARNING about '.' and '_': harmless, see Gotchas
+
+# a host terminal: create a new slice topic that matches the regex (1 partition). It prints a WARNING about '.' and '_':
+# harmless, see Gotchas. Terminal 1 lists it under "topics:" ~6-13 s later
+demo/bin/kafka kafka-topics --create --topic routing.orders.cancelled.vn --partitions 1 --replication-factor 1
 
 # php container (/demo)
+
+# terminal 2: a routing key = one order (order 9) to topic routing.<key>, here the new routing.orders.cancelled.vn
 04-routing/kafka/run publish.php orders.cancelled.vn
-04-routing/kafka/run publish.php order.cancelled.th                  # a typo
+
+# terminal 2: a typo ("order." instead of "orders."): topic routing.order.cancelled.th doesn't exist. Wait ~3 s for "failed:"
+04-routing/kafka/run publish.php order.cancelled.th
 ```
 
 ```

@@ -29,7 +29,27 @@ demo/03-retry-dlq/reset.sh      # deletes the retry.* queues, recreates topics r
 
 UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081>.
 
-`publish.php 5 3` publishes 5 jobs, and job 3 carries an `x-fail: timeout` header, so every run fails the same way. Workers print the time since each job was published.
+### The scripts
+
+| Script | What it does | Arguments |
+|---|---|---|
+| `rabbitmq/worker.php <mode>` | Consumes `retry.jobs` one job at a time until Ctrl-C. Acks good jobs; what it does with a failed one depends on the mode | `reject` (Act 1): reject + requeue, the broker retries with backoff. `nack` (Act 2): nack + requeue. `route` (Act 3): republish to a DLQ chosen by failure reason |
+| `rabbitmq/publish.php <count> <failing>` | Publishes `job 1` … `job <count>` to `retry.jobs`, then exits | `<failing>`: which jobs fail, `id[:reason]` comma-separated, reason defaults to `timeout`. `5 3` = 5 jobs, job 3 fails with `timeout` |
+| `rabbitmq/dead.php [queue]` | Reads and removes every message in a dead-letter queue and prints why it's there, then exits | queue name, default `retry.dead` |
+| `kafka/worker.php` | Consumes `retry.jobs`; a failed job is copied to `retry.jobs.retry`, then committed | none |
+| `kafka/retrier.php` | Consumes `retry.jobs.retry`, waits until each job is due, retries it, then re-copies it or sends it to `retry.jobs.dlq` | none |
+| `kafka/publish.php <count> <failing>` | Same as the RabbitMQ one, to topic `retry.jobs` | same |
+| `kafka/dlq.php` | Prints `retry.jobs.dlq` from the start, then exits | none |
+
+Jobs don't really fail: the failing ones carry an `x-fail: <reason>` header and the worker obeys it, so every run fails the same way.
+
+Reading a worker line, e.g. `[+  3.3s] job 3  delivery-count=1 acquired-count=1  FAIL (timeout) -> reject(requeue)`:
+
+- `+3.3s`: seconds since the job was published.
+- `delivery-count`: failed deliveries so far (counted by the broker, RabbitMQ only).
+- `acquired-count`: how many times the job was handed to a consumer before (RabbitMQ only).
+- `attempt` (Kafka): the attempt number, kept in a header by our own code.
+- `FAIL (reason) -> ...`: what the worker did with the failed job.
 
 ---
 
@@ -50,9 +70,15 @@ Each redelivery carries `x-delivery-count` (failed attempts: `reject` only) and 
 
 ```bash
 # php container (/demo)
-php 03-retry-dlq/rabbitmq/worker.php reject          # terminal 1
-php 03-retry-dlq/rabbitmq/publish.php 5 3            # terminal 2, then wait ~20 s
-php 03-retry-dlq/rabbitmq/dead.php                   # drains retry.dead; then Ctrl-C the worker
+
+# terminal 1: a worker on retry.jobs. "reject" = on failure, reject(requeue): the broker counts it and retries with backoff
+php 03-retry-dlq/rabbitmq/worker.php reject
+
+# terminal 2: publish job 1..5 ("5"); job "3" fails with timeout. Wait ~20 s for its 3 retries (3 + 6 + 9 s)
+php 03-retry-dlq/rabbitmq/publish.php 5 3
+
+# terminal 2: print and remove what landed in the dead-letter queue retry.dead (job 3). Then Ctrl-C the worker
+php 03-retry-dlq/rabbitmq/dead.php
 ```
 
 ```
@@ -76,8 +102,14 @@ php 03-retry-dlq/rabbitmq/dead.php                   # drains retry.dead; then C
 
 ```bash
 # php container (/demo)
-php 03-retry-dlq/rabbitmq/worker.php nack            # terminal 1
-php 03-retry-dlq/rabbitmq/publish.php 5 3            # terminal 2; after ~10 s the UI shows retry.jobs Total 3 (2 ready + 1 unacked), then Ctrl-C the worker and run demo/03-retry-dlq/reset.sh on the host
+
+# terminal 1: same worker, but "nack" = on failure, nack(requeue): the broker doesn't count it as failed
+php 03-retry-dlq/rabbitmq/worker.php nack
+
+# terminal 2: publish job 1..5, job 3 fails. After ~10 s the UI shows retry.jobs Total 3 (2 ready + 1 unacked)
+php 03-retry-dlq/rabbitmq/publish.php 5 3
+
+# then Ctrl-C the worker and run demo/03-retry-dlq/reset.sh on the host: job 3 would loop forever
 ```
 
 ```
@@ -95,10 +127,16 @@ php 03-retry-dlq/rabbitmq/publish.php 5 3            # terminal 2; after ~10 s t
 
 ```bash
 # php container (/demo)
-php 03-retry-dlq/rabbitmq/worker.php route                          # terminal 1
-php 03-retry-dlq/rabbitmq/publish.php 5 3:timeout,4:validation      # terminal 2, then wait ~20 s
+
+# terminal 1: "route" = the worker picks the DLQ itself: validation at once, timeout after its 3 retries
+php 03-retry-dlq/rabbitmq/worker.php route
+
+# terminal 2: publish job 1..5; job 3 fails with timeout, job 4 with validation. Wait ~20 s
+php 03-retry-dlq/rabbitmq/publish.php 5 3:timeout,4:validation
+
+# terminal 2: print each DLQ (the argument is the queue name). Then Ctrl-C the worker
 php 03-retry-dlq/rabbitmq/dead.php retry.dlq.validation
-php 03-retry-dlq/rabbitmq/dead.php retry.dlq.timeout                # then Ctrl-C the worker
+php 03-retry-dlq/rabbitmq/dead.php retry.dlq.timeout
 ```
 
 ```
@@ -125,10 +163,19 @@ Wait until both consumers print `waiting on` before publishing.
 
 ```bash
 # php container (/demo)
-03-retry-dlq/kafka/run worker.php               # terminal 1: group retry.workers on retry.jobs
-03-retry-dlq/kafka/run retrier.php              # terminal 2: group retry.retrier on retry.jobs.retry
-03-retry-dlq/kafka/run publish.php 5 3          # terminal 3, then wait ~12 s
-03-retry-dlq/kafka/run dlq.php                  # reads retry.jobs.dlq from the start; then Ctrl-C the worker and the retrier
+
+# terminal 1: the worker (group retry.workers) reads retry.jobs; a failed job is copied to retry.jobs.retry
+03-retry-dlq/kafka/run worker.php
+
+# terminal 2: the retrier (group retry.retrier) reads retry.jobs.retry, waits 3 s per attempt, retries,
+# and after attempt 4 copies the job to retry.jobs.dlq
+03-retry-dlq/kafka/run retrier.php
+
+# terminal 3: publish job 1..5 ("5"); job "3" fails with timeout. Wait ~12 s
+03-retry-dlq/kafka/run publish.php 5 3
+
+# terminal 3: print the DLQ topic retry.jobs.dlq from the start. Then Ctrl-C the worker and the retrier
+03-retry-dlq/kafka/run dlq.php
 ```
 
 ```

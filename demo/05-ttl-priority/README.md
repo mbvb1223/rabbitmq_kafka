@@ -28,6 +28,28 @@ demo/05-ttl-priority/reset.sh   # deletes ttl.jobs, ttl.expired, ttl.prio, ttl.d
 
 UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:8081>.
 
+### The scripts
+
+| Script | What it does | Arguments |
+|---|---|---|
+| `rabbitmq/watch-expired.php` | Consumes the dead-letter queue `ttl.expired` and prints each job as it arrives, with why and from where, until Ctrl-C | none |
+| `rabbitmq/publish-ttl.php <ttl-ms>...` | Publishes one job per argument to `ttl.jobs` (which nobody consumes), then exits | each argument is that job's `expiration` in ms; `-` = none, the queue's 10 s applies. `3000 3000 -` = jobs 1-2 expire after 3 s, job 3 after 10 s |
+| `rabbitmq/publish-prio.php <count> <priority>` | Publishes `<count>` jobs, all with the same priority, to `ttl.prio`, then exits | `10 0` = 10 jobs at priority 0. Priority 0-31; above 31 counts as 31 |
+| `rabbitmq/consume-prio.php [prefetch]` | Consumes `ttl.prio` and prints each job, 0.3 s per job, until Ctrl-C | prefetch: how many unacked jobs the broker may hand it at once, default 1 |
+| `kafka/publish.php <which> <count>` | Produces `<count>` messages to one topic, then exits | `events` = topic `ttl.events` (retention 10 s), `high` = `ttl.jobs.high`, `low` = `ttl.jobs.low` |
+| `kafka/peek.php [topic]` | Reads partition 0 from the start, prints every message still stored with its age, then the log start and end offsets, then exits | topic, default `ttl.events` |
+| `kafka/consume.php` | The worker (group `ttl.workers`): waits until it owns the `ttl.jobs.high` partition, then checks high before every low job, 0.3 s per job, until Ctrl-C | none |
+
+Jobs do no real work: both priority workers print each job and sleep 0.3 s, which leaves time for a later urgent job to cut in.
+
+Reading a dead-letter line, e.g. `[dlq] job 1 (ttl 3000 ms), published 05:49:36 -> dead-lettered 05:49:39, reason=expired, from ttl.jobs`:
+
+- `job 1 (ttl 3000 ms)`: the 1st argument of `publish-ttl.php` and its expiration; `from queue: 10000` means it had none.
+- `published` / `dead-lettered`: when it was published and when it reached `ttl.expired`. The gap is how long it really lived.
+- `reason`, `from`: its `x-death` header: why it was dead-lettered, and from which queue.
+- `p31 job 1` (`consume-prio.php`): priority 31, the 1st job of that `publish-prio.php` run.
+- `offset 0: events 1, published 05:49:36  (age 312 s)` (`peek.php`): the record's offset, its body (Kafka bodies are `<which> <n>` plus publish time) and seconds since it was produced.
+
 ---
 
 ## RabbitMQ (`rabbitmq/`)
@@ -38,8 +60,13 @@ UIs: RabbitMQ <http://localhost:15672> (`app` / `app`), Kafka <http://localhost:
 
 ```bash
 # php container (/demo)
-php 05-ttl-priority/rabbitmq/watch-expired.php             # terminal 1: consumes the dead-letter queue
-php 05-ttl-priority/rabbitmq/publish-ttl.php 3000 3000 -   # terminal 2: two with expiration=3000, one without
+
+# terminal 1: consume the dead-letter queue ttl.expired and print each expired job as it arrives
+php 05-ttl-priority/rabbitmq/watch-expired.php
+
+# terminal 2: one job per argument to ttl.jobs: jobs 1-2 with expiration 3000 ms, job 3 "-" = none (the queue's 10 s).
+# Wait ~10 s and watch terminal 1
+php 05-ttl-priority/rabbitmq/publish-ttl.php 3000 3000 -
 ```
 
 - Jobs 1 and 2 are dead-lettered after 3 s, job 3 after the queue's 10 s:
@@ -51,7 +78,9 @@ php 05-ttl-priority/rabbitmq/publish-ttl.php 3000 3000 -   # terminal 2: two wit
 
 ```bash
 # php container (/demo)
-php 05-ttl-priority/rabbitmq/publish-ttl.php 8000 2000   # terminal 2; watch-expired.php still running in terminal 1
+
+# terminal 2 (watch-expired.php still running in terminal 1): job 1 with expiration 8000 ms, then job 2 with 2000 ms. Wait ~8 s
+php 05-ttl-priority/rabbitmq/publish-ttl.php 8000 2000
 ```
 
 - Both are dead-lettered **in the same second, 8 s later**. Job 2 (2 s TTL) sat expired behind job 1 until job 1 left the head.
@@ -62,22 +91,37 @@ php 05-ttl-priority/rabbitmq/publish-ttl.php 8000 2000   # terminal 2; watch-exp
 
 ```bash
 # php container (/demo)
-php 05-ttl-priority/rabbitmq/publish-prio.php 10 0         # 10 low jobs (p0), nobody consuming yet
-php 05-ttl-priority/rabbitmq/publish-prio.php 1 31         # 1 urgent job
-php 05-ttl-priority/rabbitmq/consume-prio.php              # prefetch 1
+
+# terminal 2: "10 0" = 10 low jobs at priority 0 to ttl.prio; nobody is consuming yet
+php 05-ttl-priority/rabbitmq/publish-prio.php 10 0
+
+# terminal 2: "1 31" = 1 urgent job at priority 31, the highest
+php 05-ttl-priority/rabbitmq/publish-prio.php 1 31
+
+# terminal 2: consume ttl.prio with prefetch 1 (no argument = 1) and print the jobs in the order they come out
+php 05-ttl-priority/rabbitmq/consume-prio.php
 ```
 
 - `p31 job 1` comes out first, then `p0 job 1` … `p0 job 10`.
 
 ```bash
 # php container (/demo)
-# Ctrl+C consume-prio.php first: a running consumer takes each message as it arrives, so nothing waits to be reordered
-for p in 0 4 5 20 30 31 50 255; do php 05-ttl-priority/rabbitmq/publish-prio.php 1 $p; done
-php 05-ttl-priority/rabbitmq/consume-prio.php              # p31, p50, p255, p30, p20, p5, p4, p0; Ctrl+C
 
-php 05-ttl-priority/rabbitmq/consume-prio.php 1                                                                     # terminal 1, start it first
-php 05-ttl-priority/rabbitmq/publish-prio.php 10 0; sleep 0.5; php 05-ttl-priority/rabbitmq/publish-prio.php 1 31   # terminal 2
-# Ctrl+C terminal 1 and repeat with: php 05-ttl-priority/rabbitmq/consume-prio.php 10
+# Ctrl+C consume-prio.php first: a running consumer takes each message as it arrives, so nothing waits to be reordered
+
+# terminal 2: 1 job at each priority, published in this order: 0, 4, 5, 20, 30, 31, 50, 255
+for p in 0 4 5 20 30 31 50 255; do php 05-ttl-priority/rabbitmq/publish-prio.php 1 $p; done
+
+# terminal 2: consume them with prefetch 1. Expect p31, p50, p255, p30, p20, p5, p4, p0, then Ctrl+C
+php 05-ttl-priority/rabbitmq/consume-prio.php
+
+# terminal 3, start it first: consume ttl.prio with prefetch "1" (the broker hands it 1 unacked job at a time)
+php 05-ttl-priority/rabbitmq/consume-prio.php 1
+
+# terminal 2: 10 jobs at priority 0, then 0.5 s later 1 job at priority 31. Watch where p31 lands in terminal 3
+php 05-ttl-priority/rabbitmq/publish-prio.php 10 0; sleep 0.5; php 05-ttl-priority/rabbitmq/publish-prio.php 1 31
+
+# Ctrl+C terminal 3 and repeat both, with prefetch 10 in terminal 3: php 05-ttl-priority/rabbitmq/consume-prio.php 10
 ```
 
 - 32 strict levels; anything above 31 counts as 31, and equal levels keep publish order.
@@ -95,8 +139,12 @@ A partition's log is a chain of segment files. Only the newest one, the *active*
 
 ```bash
 # php container (/demo)
-05-ttl-priority/kafka/run publish.php events 5        # ttl.events has retention.ms=10000
-sleep 30; 05-ttl-priority/kafka/run peek.php          # reads partition 0 from the start, prints, exits
+
+# terminal 1: "events 5" = 5 messages to topic ttl.events, which has retention.ms=10000 (10 s)
+05-ttl-priority/kafka/run publish.php events 5
+
+# terminal 1: wait 30 s, then print what ttl.events still stores (reads partition 0 from the start, prints, exits)
+sleep 30; 05-ttl-priority/kafka/run peek.php
 ```
 
 - After 30 s all 5 are usually still there: `5 message(s) still in ttl.events, log start offset 0, end offset 5`. (If you already see 0, a retention check happened to fire in those 30 s. Run `demo/05-ttl-priority/reset.sh` on the host and try again.)
@@ -108,12 +156,21 @@ sleep 30; 05-ttl-priority/kafka/run peek.php          # reads partition 0 from t
 
 ```bash
 # host (repo root)
-demo/05-ttl-priority/reset.sh                                                    # also deletes the RabbitMQ queues
+
+# a host terminal: start from an empty ttl.events (this also deletes the RabbitMQ queues)
+demo/05-ttl-priority/reset.sh
 
 # php container (/demo)
-05-ttl-priority/kafka/run publish.php events 5                                   # terminal 1
-while true; do 05-ttl-priority/kafka/run publish.php events 1; sleep 5; done     # terminal 2: keep the topic busy
-sleep 310; 05-ttl-priority/kafka/run peek.php | sed -n '1p;$p'                   # terminal 1: 310 s always spans one retention check after the first 5 expired
+
+# terminal 1: 5 messages to ttl.events
+05-ttl-priority/kafka/run publish.php events 5
+
+# terminal 2: keep the topic busy: 1 more message to ttl.events every 5 s, until Ctrl+C
+while true; do 05-ttl-priority/kafka/run publish.php events 1; sleep 5; done
+
+# terminal 1: wait 310 s (always spans one retention check after the first 5 expired), then peek and print only
+# its first line (the oldest message still stored) and last line (the count and offsets)
+sleep 310; 05-ttl-priority/kafka/run peek.php | sed -n '1p;$p'
 ```
 
 - The first message is still readable at **over 300 s old** with a 10 s retention: `offset 0: events 1, ... (age 3xx s)`, `log start offset 0`.
@@ -124,9 +181,15 @@ sleep 310; 05-ttl-priority/kafka/run peek.php | sed -n '1p;$p'                  
 
 ```bash
 # php container (/demo)
+
+# terminal 1: "low 10" = 10 jobs to topic ttl.jobs.low
 05-ttl-priority/kafka/run publish.php low 10
+
+# terminal 1: "high 1" = 1 job to topic ttl.jobs.high
 05-ttl-priority/kafka/run publish.php high 1
-05-ttl-priority/kafka/run consume.php                 # waits for its high partition, then polls high before every low message
+
+# terminal 1: the worker waits until it owns the ttl.jobs.high partition, then checks high before every low job
+05-ttl-priority/kafka/run consume.php
 ```
 
 - `high 1` first, then `low 1` … `low 10`.
