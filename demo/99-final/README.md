@@ -26,7 +26,7 @@ Fill **Your notes** while you learn. The scores are my starting point.
 
 | # | Demo | Stage time | Wow | Dead air | Risk | My pick | Your notes |
 |---|---|---|---|---|---|---|---|
-| 01 | queue vs stream | 8 min | medium | ~6 s Kafka settle | low | slide, not live | |
+| 01 | queue vs stream | 8 min | medium | ~6 s Kafka settle | low | slide, not live | [NOTES](../01-queue-vs-stream/NOTES.md) |
 | 02 | scale consumers | 6 min | **high**: 0.52 s vs 2.59 s, 16 idle | ~20 s per Kafka run | low | **live (Demo B)** | |
 | 03 | retry + DLQ | 4-6 min | **high**: 5 args vs 95 lines | ~20 s of backoff | medium: `all-with-x`, `reject` not `nack` | **live (Demo A)** | |
 | 04 | routing | 3-6 min | medium | ~5-10 s regex pickup | low | slide; RabbitMQ Act 2 if time | |
