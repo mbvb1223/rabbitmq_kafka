@@ -147,8 +147,8 @@ Before publishing, wait until the assignment (the broker deciding which member r
 
 ## Checklist
 
-- [ ] RabbitMQ Act 1: two consumers split 6 events, the UI shows 0 messages, a late consumer gets nothing
-- [ ] RabbitMQ Act 2: both consumers get all 6, the UI still shows 6; replayed with `first`, an offset and `30s`
-- [ ] Kafka Act 1: the third worker is idle; D resumes from the committed offset and ignores `first`
-- [ ] Kafka Act 2: two groups each get everything, in partition order, not publish order
-- [ ] I can explain in one sentence: work item vs position
+- [x] RabbitMQ Act 1: two consumers split 6 events, the UI shows 0 messages, a late consumer gets nothing
+- [x] RabbitMQ Act 2: both consumers get all 6, the UI still shows 6; replayed with `first`, an offset and `30s`
+- [x] Kafka Act 1: the third worker is idle; D resumes from the committed offset and ignores `first`
+- [x] Kafka Act 2: two groups each get everything, in partition order, not publish order
+- [x] I can explain in one sentence: work item vs position
