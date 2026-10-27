@@ -233,8 +233,8 @@ Kafka share groups count deliveries (default limit 5) but **archive** the record
 
 ## Checklist
 
-- [ ] RabbitMQ Act 1: jobs 4 and 5 finished at once, job 3 retried after 3 s / 6 s / 9 s, then landed in `retry.dead` with reason `delivery_limit`
-- [ ] Act 2: `delivery-count` stuck at 0 with `nack`, and jobs 4 and 5 starved; I can explain why `reject` fixes it
-- [ ] Act 3: each failure reason landed in its own DLQ, and I know why the binding needs `all-with-x`
-- [ ] Kafka: saw worker → retry topic → retrier → DLQ topic, and can explain why the delay is fixed per retry topic
-- [ ] I can list what Kafka made me build that RabbitMQ gave me as queue arguments
+- [x] RabbitMQ Act 1: jobs 4 and 5 finished at once, job 3 retried after 3 s / 6 s / 9 s, then landed in `retry.dead` with reason `delivery_limit`
+- [x] Act 2: `delivery-count` stuck at 0 with `nack`, and jobs 4 and 5 starved; I can explain why `reject` fixes it
+- [x] Act 3: each failure reason landed in its own DLQ, and I know why the binding needs `all-with-x`
+- [x] Kafka: saw worker → retry topic → retrier → DLQ topic, and can explain why the delay is fixed per retry topic
+- [x] I can list what Kafka made me build that RabbitMQ gave me as queue arguments

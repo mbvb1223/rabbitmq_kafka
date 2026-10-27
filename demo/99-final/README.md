@@ -28,7 +28,7 @@ Fill **Your notes** while you learn. The scores are my starting point.
 |---|---|---|---|---|---|---|---|
 | 01 | queue vs stream | 8 min | medium | ~6 s Kafka settle | low | slide, not live | [NOTES](../01-queue-vs-stream/NOTES.md) |
 | 02 | scale consumers | 6 min | **high**: 0.52 s vs 2.59 s, 16 idle | ~20 s per Kafka run | low | **live (Demo B)** | [NOTES](../02-scale-consumers/NOTES.md) |
-| 03 | retry + DLQ | 4-6 min | **high**: 5 args vs 95 lines | ~20 s of backoff | medium: `all-with-x`, `reject` not `nack` | **live (Demo A)** | |
+| 03 | retry + DLQ | 4-6 min | **high**: 5 args vs 95 lines | ~20 s of backoff | medium: `all-with-x`, `reject` not `nack` | **live (Demo A)** | [NOTES](../03-retry-dlq/NOTES.md) |
 | 04 | routing | 3-6 min | medium | ~5-10 s regex pickup | low | slide; RabbitMQ Act 2 if time | |
 | 05 | TTL + priority | 7 min | medium | Kafka side ~5 min | Kafka side unusable live | RabbitMQ priority only, if time | |
 | 06 | head-of-line | 8 min | **high**: prefetch causes HOL too | 8 s per slow job | low | **backup / 3rd demo** | |
