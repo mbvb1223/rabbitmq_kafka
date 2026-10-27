@@ -217,9 +217,9 @@ demo/bin/kafka kafka-topics --create --topic routing.orders.cancelled.vn --parti
 
 ## Checklist
 
-- [ ] RabbitMQ Act 1: each team got exactly its slice, and order 3 reached three queues
-- [ ] RabbitMQ Act 2: added `refunds` and unbound `finance` without touching the publisher; `refunds` got no history
-- [ ] RabbitMQ Act 3: a typo came back as 312 NO_ROUTE; a new event type reached `audit`
-- [ ] Kafka Act 1: `read 8, kept 5` / `kept 3`; a late group read the history
-- [ ] Kafka Act 2: the regex consumer picked up a new topic within ~15 s; the typo failed with Unknown topic or partition
-- [ ] I can explain who decides: the consumer (binding) vs the producer (topic layout)
+- [x] RabbitMQ Act 1: each team got exactly its slice, and order 3 reached three queues
+- [x] RabbitMQ Act 2: added `refunds` and unbound `finance` without touching the publisher; `refunds` got no history
+- [x] RabbitMQ Act 3: a typo came back as 312 NO_ROUTE; a new event type reached `audit`
+- [x] Kafka Act 1: `read 8, kept 5` / `kept 3`; a late group read the history
+- [x] Kafka Act 2: the regex consumer picked up a new topic within ~15 s; the typo failed with Unknown topic or partition
+- [x] I can explain who decides: the consumer (binding) vs the producer (topic layout)

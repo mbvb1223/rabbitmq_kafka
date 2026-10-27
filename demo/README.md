@@ -9,7 +9,7 @@ Each demo proves **one** claim from [../docs/03-topic-proposal.md](../docs/03-to
 | 01 | [queue-vs-stream](01-queue-vs-stream/README.md) | a message is a work item (queue) or a position (log) | 2 | [x] |
 | 02 | [scale-consumers](02-scale-consumers/README.md) | Kafka parallelism stops at the partition count; RabbitMQ scales to N workers | 5 | [x] |
 | 03 | [retry-dlq](03-retry-dlq/README.md) | RabbitMQ retries one job with backoff and dead-letters it; Kafka needs retry topics you build | 2 | [x] |
-| 04 | [routing](04-routing/README.md) | the consumer decides what it gets (bindings) vs the producer decides (topics) | 4 | [ ] |
+| 04 | [routing](04-routing/README.md) | the consumer decides what it gets (bindings) vs the producer decides (topics) | 4 | [x] |
 | 05 | [ttl-priority](05-ttl-priority/README.md) | per-message TTL and priority exist in RabbitMQ only; Kafka retention isn't TTL | 2 | [ ] |
 | 06 | [head-of-line](06-head-of-line/README.md) | one slow message blocks its partition; ordering and head-of-line blocking are the same coin | 2 | [ ] |
 | 07 | [replay](07-replay/README.md) | both can replay; who stores the offset differs | Q&A | [ ] |
