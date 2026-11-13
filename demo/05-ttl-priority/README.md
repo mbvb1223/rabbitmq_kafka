@@ -227,9 +227,9 @@ sleep 310; 05-ttl-priority/kafka/run peek.php | sed -n '1p;$p'
 
 ## Checklist
 
-- [ ] RabbitMQ Act 1: saw 3 s and 10 s expiries arrive in `ttl.expired` with `reason=expired`; I know which TTL wins
-- [ ] RabbitMQ Act 2: saw the 2 s message wait 8 s behind the head
-- [ ] RabbitMQ Act 3: saw p31 jump the queue, and saw prefetch 10 cancel it
-- [ ] Kafka Acts 1-2: messages outlived `retention.ms`; found the `largest record timestamp` log line
-- [ ] Kafka Act 3: high jumped ahead; I can name two limits of the pattern
-- [ ] I can explain in one sentence: TTL is a business rule, retention is disk management
+- [x] RabbitMQ Act 1: saw 3 s and 10 s expiries arrive in `ttl.expired` with `reason=expired`; I know which TTL wins
+- [x] RabbitMQ Act 2: saw the 2 s message wait 8 s behind the head
+- [x] RabbitMQ Act 3: saw p31 jump the queue, and saw prefetch 10 cancel it
+- [x] Kafka Acts 1-2: messages outlived `retention.ms`; found the `largest record timestamp` log line
+- [x] Kafka Act 3: high jumped ahead; I can name two limits of the pattern
+- [x] I can explain in one sentence: TTL is a business rule, retention is disk management
