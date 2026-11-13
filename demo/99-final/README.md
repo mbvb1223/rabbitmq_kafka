@@ -31,7 +31,7 @@ Fill **Your notes** while you learn. The scores are my starting point.
 | 03 | retry + DLQ | 4-6 min | **high**: 5 args vs 95 lines | ~20 s of backoff | medium: `all-with-x`, `reject` not `nack` | **live (Demo A)** | [NOTES](../03-retry-dlq/NOTES.md) |
 | 04 | routing | 3-6 min | medium | ~5-10 s regex pickup | low | slide; RabbitMQ Act 2 if time | [NOTES](../04-routing/NOTES.md) |
 | 05 | TTL + priority | 7 min | medium | Kafka side ~5 min | Kafka side unusable live | RabbitMQ priority only, if time | [NOTES](../05-ttl-priority/NOTES.md) |
-| 06 | head-of-line | 8 min | **high**: prefetch causes HOL too | 8 s per slow job | low | **backup / 3rd demo** | |
+| 06 | head-of-line | 8 min | **high**: prefetch causes HOL too | 8 s per slow job | low | **backup / 3rd demo** | [NOTES](../06-head-of-line/NOTES.md) |
 | 07 | replay | 6 min | low-medium | short | low | Q&A pocket | |
 | 08 | share groups | 8 min | medium | 31 s lock wait | **high**: orphan CLI consumers, batching skew | Q&A pocket | |
 | 09 | log compaction | 6 min | medium | ~23 s cleaner wait | medium | slide 13, Q&A pocket | |

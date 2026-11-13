@@ -209,9 +209,9 @@ demo/bin/kafka kafka-consumer-groups --describe --group hol.workers
 
 ## Checklist
 
-- [ ] RabbitMQ Act 1: only job 3 is late, and I can say why completion order no longer matches publish order
-- [ ] RabbitMQ Act 2: with prefetch 10, jobs 5, 7, 9 wait behind job 3 while B is idle
-- [ ] RabbitMQ Act 3: B is `waiting`; killing A mid-job-3 hands job 3 to B as redelivered, order kept
-- [ ] Kafka Act 1: jobs behind job 3 on its partition are ~8 s late, and the other worker can't help
-- [ ] Kafka Acts 2-3: the poison job leaves LAG stuck at 4; `dlq` mode parks it and LAG drops to 0
-- [ ] I can explain "ordering and head-of-line blocking are the same coin" in one sentence
+- [x] RabbitMQ Act 1: only job 3 is late, and I can say why completion order no longer matches publish order
+- [x] RabbitMQ Act 2: with prefetch 10, jobs 5, 7, 9 wait behind job 3 while B is idle
+- [x] RabbitMQ Act 3: B is `waiting`; killing A mid-job-3 hands job 3 to B as redelivered, order kept
+- [x] Kafka Act 1: jobs behind job 3 on its partition are ~8 s late, and the other worker can't help
+- [x] Kafka Acts 2-3: the poison job leaves LAG stuck at 4; `dlq` mode parks it and LAG drops to 0
+- [x] I can explain "ordering and head-of-line blocking are the same coin" in one sentence
