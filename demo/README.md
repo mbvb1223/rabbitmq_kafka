@@ -12,7 +12,7 @@ Each demo proves **one** claim from [../docs/03-topic-proposal.md](../docs/03-to
 | 04 | [routing](04-routing/README.md) | the consumer decides what it gets (bindings) vs the producer decides (topics) | 4 | [x] |
 | 05 | [ttl-priority](05-ttl-priority/README.md) | per-message TTL and priority exist in RabbitMQ only; Kafka retention isn't TTL | 2 | [x] |
 | 06 | [head-of-line](06-head-of-line/README.md) | one slow message blocks its partition; ordering and head-of-line blocking are the same coin | 2 | [x] |
-| 07 | [replay](07-replay/README.md) | both can replay; who stores the offset differs | Q&A | [ ] |
+| 07 | [replay](07-replay/README.md) | both can replay; who stores the offset differs | Q&A | [x] |
 | 08 | [share-groups](08-share-groups/README.md) | Kafka's real queue (4.2+): what it fixes, what it doesn't, and why PHP can't use it | 2 | [ ] |
 | 09 | [log-compaction](09-log-compaction/README.md) | where Kafka genuinely wins: latest value per key | 13 | [ ] |
 | 10 | [durability](10-durability/README.md) | what "acknowledged" means: `acks`/`min.insync.replicas` vs quorum fsync | 3 | [ ] |

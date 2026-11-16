@@ -237,9 +237,9 @@ $K kafka-consumer-groups --group replay.billing --topic replay.events --reset-of
 
 ## Checklist
 
-- [ ] RabbitMQ Act 1: killed `resume.php` mid-job, restarted it, saw it resume from the file and replay the in-flight event
-- [ ] I can explain why `next` misses events and `first` redoes them when nobody stores the offset
-- [ ] RabbitMQ Act 2: replayed by `@time` and by `30s`, and hit the int trap
-- [ ] Kafka Acts 1-2: the restart resumed from the broker; the reset was refused while active, then worked with `--dry-run` and `--execute`
-- [ ] Kafka Act 3: `reprocess.php` read from a time without touching `replay.billing`
-- [ ] I can say who stores the offset on each side, and what limits how far back you can replay
+- [x] RabbitMQ Act 1: killed `resume.php` mid-job, restarted it, saw it resume from the file and replay the in-flight event
+- [x] I can explain why `next` misses events and `first` redoes them when nobody stores the offset
+- [x] RabbitMQ Act 2: replayed by `@time` and by `30s`, and hit the int trap
+- [x] Kafka Acts 1-2: the restart resumed from the broker; the reset was refused while active, then worked with `--dry-run` and `--execute`
+- [x] Kafka Act 3: `reprocess.php` read from a time without touching `replay.billing`
+- [x] I can say who stores the offset on each side, and what limits how far back you can replay
