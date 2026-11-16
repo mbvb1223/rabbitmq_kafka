@@ -27,6 +27,7 @@
 - **The consumer needs no rewind code; it needs idempotent processing** (upsert by event id), or a replay bills twice.
 - **One-off reprocess (`reprocess.php`):** `assign()` instead of `subscribe()` and no commit, so it joins no group, doesn't need billing stopped, and leaves `replay.billing` untouched. It reads up to the end as of its start. Its own side effects (DB writes, API calls) must still be idempotent.
 - **Retention is the replay window on both sides.** Past it, the data is gone.
+- **"RabbitMQ doesn't store the offset" is a PHP limit, not a RabbitMQ one.** A stream can be read over AMQP 0-9-1 (port 5672, php-amqplib: the app stores the offset) or over the native stream protocol (port 5552: a named consumer + `storeOffset()` / `queryOffset()` on the broker, plus super streams and dedup). The stream protocol has official clients for Java, .NET and Go; PHP has only an experimental one (`crazy-goat/rabbit-stream`). The comparison depends on the client library too; collected in [99-final §5](../99-final/README.md#5-it-depends-on-the-client-not-only-the-broker).
 
 ## Tiếng Việt
 
@@ -53,3 +54,4 @@
 - **Consumer không cần code tua lại; nó cần xử lý idempotent** (upsert theo event id), không thì replay là tính tiền 2 lần.
 - **Chạy lại một lần (`reprocess.php`):** `assign()` thay vì `subscribe()` và không commit, nên không join group, không cần dừng billing, `replay.billing` giữ nguyên. Nó đọc tới cuối topic tại thời điểm bắt đầu chạy. Side effect của chính nó (ghi DB, gọi API) vẫn phải idempotent.
 - **Retention là giới hạn replay ở cả hai bên.** Quá mốc đó thì data đã bị xoá.
+- **"RabbitMQ không lưu offset" là giới hạn của PHP, không phải của RabbitMQ.** Stream đọc được qua AMQP 0-9-1 (port 5672, php-amqplib: app tự lưu offset) hoặc qua stream protocol native (port 5552: consumer có tên + `storeOffset()` / `queryOffset()` trên broker, thêm super streams và chống trùng). Stream protocol có client chính thức cho Java, .NET, Go; PHP chỉ có một bản thử nghiệm (`crazy-goat/rabbit-stream`). Kết quả so sánh còn phụ thuộc vào thư viện client; tổng hợp ở [99-final §5](../99-final/README.md#5-it-depends-on-the-client-not-only-the-broker).

@@ -64,7 +64,22 @@ Also learned (not in the proposal):
 - RabbitMQ `x-delivery-limit=5` = 6 deliveries; Kafka `share.delivery.count.limit=5` = 5 (08).
 - Empty KIP-848 groups survive topic deletion; `reset.sh` scripts delete their own groups (04, 07).
 
-## 5. Before going on stage
+## 5. It depends on the client, not only the broker
+
+A comparison is broker + protocol + client library. Several "RabbitMQ can't" / "Kafka can't" findings are really "the PHP client can't". Add a row whenever a demo hits one; at the end, decide whether this becomes its own talk point or a caveat on the matrix. Library health and versions: [docs/news/08-php-clients.md](../../docs/news/08-php-clients.md).
+
+| Feature | The broker has it | From PHP | Elsewhere | Demo |
+|---|---|---|---|---|
+| Broker-side offset for a RabbitMQ stream | yes, over the stream protocol (port 5552): a named consumer + `storeOffset()` / `queryOffset()` | php-amqplib speaks AMQP 0-9-1 only, so the app stores the offset. Stream protocol: only experimental `crazy-goat/rabbit-stream` | official stream clients for Java, .NET, Go | 07 |
+| Reset a Kafka group's offsets from code | Admin API `alterConsumerGroupOffsets` (librdkafka has it too) | php-rdkafka has no Admin API binding: CLI, kafka-ui, or `commit()` from a consumer that never subscribes (group must be empty). Experimental `lisachenko/kafka-client` claims an admin API | Java, Go, Python AdminClient | 07 |
+| Move a live Kafka consumer (`seek()`) | yes | php-rdkafka's `KafkaConsumer` has no `seek()`: `assign()` with explicit offsets instead | Java `seek()` | 07 |
+| Kafka share groups (a real queue) | Kafka 4.2+ | php-rdkafka: no binding (librdkafka has it as Preview since 2.15.0; our image has 2.14.1). Experimental `lisachenko/kafka-client` claims a `KafkaShareConsumer` | Java `KafkaShareConsumer` | 08 |
+| Notice a frozen consumer | heartbeats | php-amqplib defaults to `heartbeat: 0`, so a stuck worker holds its job until `consumer_timeout` (30 min) | | 08 |
+| KIP-848 consumer groups | Kafka 4.0+ | works only if the image's librdkafka is ≥ 2.12: `php:8.4-cli` (Debian trixie) ships 2.8.0, Alpine 3.24 ships 2.14.1 | Java client 4.0+ | 02 |
+| Many workers | | no threads: fork with `pcntl`, one connection per process; librdkafka's threads don't survive `pcntl_fork()` | threads in one process | 02 |
+| Install | | php-amqplib: pure PHP. php-rdkafka: C extension + librdkafka in every image | | 01 |
+
+## 6. Before going on stage
 
 - [ ] `docker compose pull` and `docker build -t demo-kafka-php demo/lib` at home, not on venue Wi-Fi
 - [ ] Port 5672 free (or `RABBITMQ_PORT=5673` everywhere)
